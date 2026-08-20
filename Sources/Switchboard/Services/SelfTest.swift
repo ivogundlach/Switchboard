@@ -25,6 +25,7 @@ enum SelfTest {
         try baseline.validate(manifest)
         let runtime = try JSONDecoder().decode(RuntimeManifest.self, from: Data(contentsOf: runtimeURL))
         try RuntimeManifestValidator.validate(runtime, moduleIDs: Set(manifest.modules.map(\.id)))
+        try validateKineticsBoundary(manifest: manifest, runtime: runtime, bundleURL: Bundle.main.bundleURL)
         let scheduledOwners = Dictionary(uniqueKeysWithValues: manifest.scheduledComponents.map { ($0.label, $0.owner) })
         guard runtime.jobs.allSatisfy({ scheduledOwners[$0.label] == "switchboard:\($0.moduleID)" }) else {
             throw SelfTestError.runtimeOwnershipMismatch
@@ -117,6 +118,84 @@ enum SelfTest {
         let entitlements = try PropertyListSerialization.propertyList(from: entitlementData, options: [], format: nil) as? [String: Any]
         guard entitlements?["com.apple.security.app-sandbox"] as? Bool == true else {
             throw SelfTestError.invalidCopyPathExtension
+        }
+    }
+
+    private static func validateKineticsBoundary(
+        manifest: ModuleManifest,
+        runtime: RuntimeManifest,
+        bundleURL: URL
+    ) throws {
+        guard let module = manifest.modules.first(where: { $0.id == KineticsCompanionController.moduleID }),
+              module.availability == .ready,
+              module.components == ["nested Kinetics companion", "migration-only inert LoginLauncher helper", "Switchboard continuous agent job"],
+              module.legacyLabels.isEmpty,
+              module.legacyBundleIDs.contains(KineticsCompanionController.bundleIdentifier),
+              module.legacyBundleIDs.contains("com.ivogundlach.Kinetics.LoginLauncher") else {
+            throw SelfTestError.kineticsManifestBoundary
+        }
+        guard manifest.scheduledComponents.contains(where: {
+            $0.label == KineticsLegacyLoginMigration.helperBundleIdentifier
+                && $0.owner == "switchboard:desktop.kinetics"
+                && $0.cadence.contains("never registered")
+        }) else {
+            throw SelfTestError.kineticsManifestBoundary
+        }
+        let jobs = runtime.jobs.filter { $0.moduleID == KineticsCompanionController.moduleID }
+        guard jobs.count == 1,
+              jobs[0].label == "com.ivogundlach.Kinetics",
+              jobs[0].executable == "Companions/Kinetics.app/Contents/MacOS/Kinetics",
+              jobs[0].arguments == ["--login"],
+              jobs[0].schedule.kind == .continuous else {
+            throw SelfTestError.kineticsManifestBoundary
+        }
+        let executableURL: URL
+        do {
+            executableURL = try KineticsCompanionController.validate(bundleURL: bundleURL)
+        } catch {
+            throw SelfTestError.missingKineticsCompanion
+        }
+        let iconURL = executableURL
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appending(path: "Resources/AppIcon.icns")
+        let iconValues = try iconURL.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+        guard iconValues.isRegularFile == true,
+              iconValues.isSymbolicLink != true,
+              (iconValues.fileSize ?? 0) > 0 else {
+            throw SelfTestError.missingKineticsCompanion
+        }
+        try validateKineticsMigrationHelper(bundleURL: bundleURL)
+    }
+
+    private static func validateKineticsMigrationHelper(bundleURL: URL) throws {
+        let helper = bundleURL.appending(
+            path: "Contents/Library/LoginItems/Kinetics Login Launcher.app",
+            directoryHint: .isDirectory
+        )
+        let values = try helper.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+        guard values.isDirectory == true, values.isSymbolicLink != true else {
+            throw SelfTestError.missingKineticsMigrationHelper
+        }
+        let infoURL = helper.appending(path: "Contents/Info.plist")
+        let info = try PropertyListSerialization.propertyList(
+            from: Data(contentsOf: infoURL), options: [], format: nil
+        ) as? [String: Any]
+        guard info?["CFBundleIdentifier"] as? String == KineticsLegacyLoginMigration.helperBundleIdentifier,
+              info?["CFBundleExecutable"] as? String == "Kinetics Login Launcher",
+              info?["LSBackgroundOnly"] as? Bool == true,
+              info?["LSUIElement"] as? Bool == true,
+              info?["LSMinimumSystemVersion"] as? String == "26.0" else {
+            throw SelfTestError.invalidKineticsMigrationHelper
+        }
+        let executable = helper.appending(path: "Contents/MacOS/Kinetics Login Launcher")
+        let executableValues = try executable.resourceValues(
+            forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .isExecutableKey]
+        )
+        guard executableValues.isRegularFile == true,
+              executableValues.isSymbolicLink != true,
+              executableValues.isExecutable == true else {
+            throw SelfTestError.missingKineticsMigrationHelper
         }
     }
 }
@@ -282,6 +361,10 @@ enum SelfTestError: LocalizedError {
     case missingBundledService(String)
     case missingCopyPathExtension
     case invalidCopyPathExtension
+    case kineticsManifestBoundary
+    case missingKineticsCompanion
+    case missingKineticsMigrationHelper
+    case invalidKineticsMigrationHelper
 
     var errorDescription: String? {
         switch self {
@@ -304,6 +387,10 @@ enum SelfTestError: LocalizedError {
         case .missingBundledService(let name): "The bundled macOS Service \(name) is missing or unsafe."
         case .missingCopyPathExtension: "The bundled Copy Path Finder Sync extension is missing or unsafe."
         case .invalidCopyPathExtension: "The bundled Copy Path Finder Sync extension identity or entitlement is invalid."
+        case .kineticsManifestBoundary: "The Kinetics module or continuous agent boundary is invalid."
+        case .missingKineticsCompanion: "The nested Kinetics companion is missing or unsafe."
+        case .missingKineticsMigrationHelper: "The inert Kinetics migration helper is missing or unsafe."
+        case .invalidKineticsMigrationHelper: "The inert Kinetics migration helper identity or background settings are invalid."
         }
     }
 }

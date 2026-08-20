@@ -11,6 +11,7 @@
     {"label":"com.ivogundlach.memory.semantic-index","moduleID":"systems.memory","executable":"Modules/systems.memory/bin/semantic-index-retry","arguments":["--semantic-only"],"schedule":{"kind":"daily","hour":4,"minute":0}},
     {"label":"com.ivogundlach.personal-repo-sync","moduleID":"systems.repository-release","executable":"Modules/systems.repository-release/bin/personal-repo-sync","arguments":[],"schedule":{"kind":"daily","hour":4,"minute":0}},
     {"label":"com.ivogundlach.quit-on-close","moduleID":"desktop.quit-on-close","executable":"Helpers/quit-on-close","arguments":[],"schedule":{"kind":"continuous"}},
+    {"label":"com.ivogundlach.Kinetics","moduleID":"desktop.kinetics","executable":"Companions/Kinetics.app/Contents/MacOS/Kinetics","arguments":["--login"],"schedule":{"kind":"continuous"}},
     {"label":"com.ivogundlach.transcript-distill","moduleID":"systems.memory","executable":"Modules/systems.memory/bin/memory-transcript-distill","arguments":[],"schedule":{"kind":"daily","hour":4,"minute":0}},
     {"label":"com.ivogundlach.weekly-system-improvement","moduleID":"systems.codex-improvement","executable":"Modules/systems.codex-improvement/bin/weekly-system-improvement","arguments":["--scheduled"],"schedule":{"kind":"interval","seconds":21600,"runAtLoad":true,"weeklyAlso":{"weekday":1,"hour":19,"minute":0}}},
     {"label":"com.user.smartwake","moduleID":"desktop.smart-wake","executable":"Modules/desktop.smart-wake/bin/smart-wake.sh","arguments":[],"schedule":{"kind":"continuous"}},

@@ -2,7 +2,7 @@
 
 ## Supported status
 
-Switchboard is an unreleased project with ready modules and one planned module, Kinetics. Smart Wake's core behavior and Copy Path are ready, but there is no public DMG or production installation supported today.
+Switchboard is an unreleased project with ready modules and no planned modules. Kinetics runs as a signed nested companion under Switchboard's one background agent; its inert migration-only LoginLauncher bundle is included for exact SMAppService identity but is never registered or launched. Smart Wake's core behavior and Copy Path are ready, but there is no public DMG or production installation supported today.
 
 ## Reporting a vulnerability
 

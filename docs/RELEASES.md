@@ -12,7 +12,7 @@ swift test
 build/Switchboard.app/Contents/MacOS/Switchboard --self-test
 ```
 
-The current test suite has **98 tests in 16 suites**. `./build.sh` creates the local app and deliberately does not install it. It remains blocked when the required Apple Developer ID certificate is absent.
+The current test suite has **105 tests in 17 suites**. `./build.sh` creates the local app, including the signed nested Kinetics companion and inert migration helper, and deliberately does not install it. It remains blocked when the required Apple Developer ID certificate is absent.
 
 ## Implemented update path
 

@@ -12,6 +12,7 @@ final class ModuleStore {
     let warmCorners: WarmCornerSettings
     private let warmCornerRuntime: WarmCornerRuntime
     private let audioGuard = AudioDisconnectGuardController()
+    private let kinetics = KineticsCompanionController()
     let brightness = BrightnessController()
     private let copyPath = CopyPathController()
     let updates = UpdateCoordinator()
@@ -37,6 +38,8 @@ final class ModuleStore {
             recoveryStore: RecoveryStore(rootURL: applicationSupport.appending(path: "Recovery", directoryHint: .isDirectory))
         )
     }()
+    @ObservationIgnored
+    private lazy var kineticsLegacyMigration = KineticsLegacyLoginMigration()
 
     private(set) var enabledModuleIDs: Set<String>
     var selectedModuleID: String?
@@ -63,6 +66,7 @@ final class ModuleStore {
             modules: manifest.modules
         )
         persistEnabledModules()
+        resumePendingKineticsMigration()
 
         selectedModuleID = manifest.modules.first?.id
     }
@@ -76,6 +80,8 @@ final class ModuleStore {
                 audioGuard.start()
             case "desktop.brightness":
                 brightness.start()
+            case "desktop.kinetics":
+                kinetics.refresh(bundleURL: Bundle.main.bundleURL)
             case "files.copy-path":
                 do {
                     try copyPath.enable(bundleURL: Bundle.main.bundleURL)
@@ -158,6 +164,10 @@ final class ModuleStore {
                 return audioGuard.isRunning ? .ready("Watching audio output") : .unavailable("Enabled · watcher stopped")
             case "desktop.brightness":
                 return brightness.isRunning ? .ready("Ready") : .unavailable("Enabled · controller stopped")
+            case "desktop.kinetics":
+                return kinetics.isReady
+                    ? .ready("Ready · Switchboard agent owns background runtime")
+                    : .unavailable("Enabled · companion unavailable")
             default:
                 return .ready("Enabled")
             }
@@ -239,6 +249,10 @@ final class ModuleStore {
             await enableWarmCorners(module)
             return
         }
+        if module.id == "desktop.kinetics" {
+            await enableKinetics(module)
+            return
+        }
 
         let commandNames = commands(for: module)
         let serviceNames = services(for: module).map(\.name)
@@ -315,6 +329,66 @@ final class ModuleStore {
         }
     }
 
+    private func enableKinetics(_ module: ModuleDefinition) async {
+        guard CanonicalInstallGate.isCanonical() else {
+            lastError = "Install Switchboard in Applications before enabling \(module.name)."
+            return
+        }
+        kinetics.refresh(bundleURL: Bundle.main.bundleURL)
+        guard kinetics.isReady else {
+            lastError = "\(module.name) was not enabled: \(kinetics.lastFailure ?? "the nested companion is unavailable")"
+            return
+        }
+        do {
+            try kineticsLegacyMigration.enable(
+                currentSelection: enabledModuleIDs,
+                registerSharedAgent: { [agentRegistration] in
+                    try agentRegistration.synchronize(shouldRun: true)
+                },
+                validateCompanion: { [bundleURL = Bundle.main.bundleURL] in
+                    do { _ = try KineticsCompanionController.validate(bundleURL: bundleURL) }
+                    catch { throw KineticsLegacyLoginMigrationError.companionUnavailable(error.localizedDescription) }
+                },
+                persistSelection: { [weak self] selection in
+                    try self?.persistKineticsSelection(selection)
+                }
+            )
+            synchronizeAgentRegistration()
+        } catch {
+            kinetics.stop()
+            lastError = "\(module.name) was not enabled: \(error.localizedDescription)"
+        }
+    }
+
+    private func resumePendingKineticsMigration() {
+        guard CanonicalInstallGate.isCanonical() else { return }
+        do {
+            try kineticsLegacyMigration.resume(
+                currentSelection: enabledModuleIDs,
+                registerSharedAgent: { [agentRegistration] in
+                    try agentRegistration.synchronize(shouldRun: true)
+                },
+                validateCompanion: { [bundleURL = Bundle.main.bundleURL] in
+                    do { _ = try KineticsCompanionController.validate(bundleURL: bundleURL) }
+                    catch { throw KineticsLegacyLoginMigrationError.companionUnavailable(error.localizedDescription) }
+                },
+                persistSelection: { [weak self] selection in
+                    try self?.persistKineticsSelection(selection)
+                }
+            )
+        } catch {
+            enabledModuleIDs.remove(KineticsLegacyLoginMigration.moduleID)
+            persistEnabledModules()
+            lastError = "Kinetics migration could not resume safely: \(error.localizedDescription)"
+        }
+    }
+
+    private func persistKineticsSelection(_ selection: Set<String>) throws {
+        try ModuleSelectionFile.save(selection, to: applicationSupportURL)
+        enabledModuleIDs = selection
+        UserDefaults.standard.set(selection.sorted(), forKey: Self.enabledKey)
+    }
+
     private func disableModule(_ module: ModuleDefinition) {
         let commandNames = commands(for: module)
         let serviceNames = services(for: module).map(\.name)
@@ -348,6 +422,7 @@ final class ModuleStore {
         switch module.id {
         case "desktop.audio-guard": audioGuard.start()
         case "desktop.brightness": brightness.start()
+        case "desktop.kinetics": kinetics.refresh(bundleURL: Bundle.main.bundleURL)
         default: break
         }
     }
@@ -357,6 +432,7 @@ final class ModuleStore {
         case "desktop.warm-corners": warmCornerRuntime.stop()
         case "desktop.audio-guard": audioGuard.stop()
         case "desktop.brightness": brightness.stop()
+        case "desktop.kinetics": kinetics.stop()
         default: break
         }
     }

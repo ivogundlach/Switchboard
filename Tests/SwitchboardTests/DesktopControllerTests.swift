@@ -88,6 +88,58 @@ struct DesktopControllerTests {
         }
         #expect(runner.calls.isEmpty)
     }
+
+    @Test
+    func kineticsReadinessChecksNestedIdentityWithoutLaunchingAnything() throws {
+        let bundleURL = try makeFakeKineticsBundle()
+        defer { try? FileManager.default.removeItem(at: bundleURL) }
+
+        let controller = KineticsCompanionController()
+        controller.refresh(bundleURL: bundleURL)
+
+        #expect(controller.isReady)
+        #expect(controller.lastFailure == nil)
+        #expect(FileManager.default.fileExists(
+            atPath: bundleURL.appending(path: KineticsCompanionController.companionRelativePath)
+                .appending(path: KineticsCompanionController.executableRelativePath).path
+        ))
+    }
+
+    @Test
+    func kineticsReadinessRejectsLegacyLoginLauncherWithoutCreatingState() throws {
+        let bundleURL = try makeFakeKineticsBundle()
+        defer { try? FileManager.default.removeItem(at: bundleURL) }
+        let legacyURL = bundleURL.appending(path: KineticsCompanionController.companionRelativePath)
+            .appending(path: "Contents/Library/LoginItems/Kinetics Login Launcher.app", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: legacyURL, withIntermediateDirectories: true)
+
+        let controller = KineticsCompanionController()
+        controller.refresh(bundleURL: bundleURL)
+
+        #expect(!controller.isReady)
+        #expect(controller.lastFailure == KineticsCompanionError.loginLauncherBundled.localizedDescription)
+    }
+}
+
+private func makeFakeKineticsBundle() throws -> URL {
+    let root = FileManager.default.temporaryDirectory.appending(path: "switchboard-kinetics-\(UUID().uuidString).app", directoryHint: .isDirectory)
+    let companion = root.appending(path: KineticsCompanionController.companionRelativePath, directoryHint: .isDirectory)
+    let executable = companion.appending(path: KineticsCompanionController.executableRelativePath)
+    let resources = companion.appending(path: "Contents/Resources", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: executable.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: resources, withIntermediateDirectories: true)
+    let info: [String: Any] = [
+        "CFBundleIdentifier": KineticsCompanionController.bundleIdentifier,
+        "CFBundleExecutable": "Kinetics",
+        "LSUIElement": true,
+        "LSMinimumSystemVersion": "26.0",
+    ]
+    let data = try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+    try data.write(to: companion.appending(path: "Contents/Info.plist"))
+    try Data("fake executable".utf8).write(to: executable)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+    try Data("fake icon".utf8).write(to: resources.appending(path: "AppIcon.icns"))
+    return root
 }
 
 private final class RecordingBrightnessAPI: BrightnessDisplayAPI {

@@ -6,9 +6,9 @@ Switchboard is one menu-bar app for small Mac utilities. It presents each utilit
 
 - The target is **macOS 26 on Apple silicon**.
 - One Switchboard background agent runs the enabled schedules and module workers.
-- Ready modules are **Warm Corners**, **Audio Disconnect Guard**, **Quit on Close**, **Mac Brightness**, **Smart Wake**, **Mail Assistant**, **AutoInstall DMG**, **Copy Safari URL**, **Copy Path**, **Local Read Connectors**, **Memory System**, **Codex & System Improvement**, **Repository & Release Automation**, **NotebookLM Sync**, **Backup Coverage Audit**, and **Advanced Commands**.
-- Planned modules are **Kinetics**. Smart Wake core wake/network/display-lock behavior is ready; its privileged sleep guard remains in place and iMessage remains unresolved rather than being migrated.
-- The app bundles sanitized command payloads, macOS Services, and the Copy Path Finder Sync extension. Activating a command, service, extension, or scheduler migrates it through a recoverable transaction with rollback support. The current workflow does not delete legacy items or the existing Copy Path host app.
+- Ready modules are **Warm Corners**, **Kinetics**, **Audio Disconnect Guard**, **Quit on Close**, **Mac Brightness**, **Smart Wake**, **Mail Assistant**, **AutoInstall DMG**, **Copy Safari URL**, **Copy Path**, **Local Read Connectors**, **Memory System**, **Codex & System Improvement**, **Repository & Release Automation**, **NotebookLM Sync**, **Backup Coverage Audit**, and **Advanced Commands**.
+- There are no planned modules. Smart Wake core wake/network/display-lock behavior is ready; its privileged sleep guard remains in place and iMessage remains unresolved rather than being migrated.
+- The app bundles sanitized command payloads, macOS Services, and the Copy Path Finder Sync extension. Command, service, and scheduler migrations use recoverable transactions with rollback support. Copy Path activates only its exact bundled extension identity and rolls back an immediate enable failure. The current workflow does not delete legacy items or the existing Copy Path host app.
 - A local build is not installed. There is no current public DMG or public release.
 
 ## Module catalog and boundaries
@@ -21,7 +21,7 @@ Switchboard owns one background agent, its bundled payloads, and its Services. S
 |---|---|
 | Standalone products | Market, School, Tool Dashboard, Vitals, UsageQueue, ReleaseRadar, NutrientTracker, Psephos, Tax Simulator, Runway |
 | Separate Safari apps | ForceCopyPaste, NewTabLinks, YouTube Defaults |
-| Planned Switchboard modules | Kinetics |
+| Planned Switchboard modules | None |
 
 ## Updates and release status
 
@@ -43,7 +43,7 @@ swift test
 build/Switchboard.app/Contents/MacOS/Switchboard --self-test
 ```
 
-The test suite currently has **98 tests in 16 suites**. `./build.sh` creates a local app but does not install it; it stops when the pinned local signing identity is unavailable. The self-test validates the manifest, ownership boundaries, bundled commands and Services, runtime jobs, and migration inventories. The updater has its own focused test suite.
+The test suite currently has **105 tests in 17 suites**. `./build.sh` creates a local app, including the signed nested Kinetics companion and an inert migration-only LoginLauncher bundle that is never registered, but does not install it; it stops when the pinned local signing identity is unavailable. The self-test validates the manifest, ownership boundaries, bundled commands and Services, runtime jobs, nested companion/helper identity, and migration inventories. The updater has its own focused test suite.
 
 ## License
 

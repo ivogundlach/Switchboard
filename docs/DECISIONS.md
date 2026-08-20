@@ -4,11 +4,11 @@ These boundaries describe the current product, not a promise that every catalog 
 
 ## Product and module boundary
 
-Switchboard is one menu-bar app for general-purpose Mac utilities with one background agent. Smart Wake core wake/network/display-lock behavior is now ready alongside the existing ready modules. Its privileged sleep guard remains outside generic migration because it consumes the same user-state lease, while iMessage remains unresolved and is not migrated. Kinetics remains planned; Copy Path is now a bundled ready module.
+Switchboard is one menu-bar app for general-purpose Mac utilities with one background agent. Kinetics is now ready as a signed nested companion owned by one continuous Switchboard agent job. A separate inert migration-only LoginLauncher bundle preserves exact SMAppService identity for recovery, but is never registered or launched. Smart Wake core wake/network/display-lock behavior is ready alongside the existing ready modules. Its privileged sleep guard remains outside generic migration because it consumes the same user-state lease, while iMessage remains unresolved and is not migrated. Copy Path is now a bundled ready module.
 
 ## Bundled operations
 
-Sanitized command payloads, macOS Services, and the Copy Path Finder Sync extension ship inside the Switchboard bundle. Command, service, scheduler, and extension activation is recoverable: it records intent, verifies each replacement, and can roll back. The current migration path does not delete legacy items or the existing Copy Path host app.
+Sanitized command payloads, macOS Services, and the Copy Path Finder Sync extension ship inside the Switchboard bundle. Command, service, and scheduler migration records intent, verifies each replacement, and can roll back. Copy Path uses its exact bundled extension identity and reverses an immediate activation failure. The current migration path does not delete legacy items or the existing Copy Path host app.
 
 ## Separate products and integrations
 

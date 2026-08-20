@@ -20,10 +20,24 @@ fi
 swift build --package-path "$ROOT" -c release
 BIN_DIR="$(swift build --package-path "$ROOT" -c release --show-bin-path)"
 
+# Build the vendored Kinetics companion for the same Apple-silicon/macOS target
+# as Switchboard. Its source intentionally contains only the main app; the old
+# SMAppService LoginLauncher target is not part of this bundle.
+KINETICS_SCRATCH="$ROOT/.build/kinetics"
+swift build --package-path "$ROOT/Vendor/Kinetics" --scratch-path "$KINETICS_SCRATCH" \
+  -c release --triple arm64-apple-macosx26.0
+KINETICS_BIN_DIR="$(swift build --package-path "$ROOT/Vendor/Kinetics" --scratch-path "$KINETICS_SCRATCH" \
+  -c release --triple arm64-apple-macosx26.0 --show-bin-path)"
+KINETICS_BIN="$KINETICS_BIN_DIR/Kinetics"
+[[ -x "$KINETICS_BIN" ]] || { echo "Vendored Kinetics binary is missing." >&2; exit 6; }
+
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Library/LaunchAgents" \
   "$APP/Contents/PlugIns/CopyPathFinderExt.appex/Contents/MacOS" \
-  "$APP/Contents/PlugIns/CopyPathFinderExt.appex/Contents/Resources"
+  "$APP/Contents/PlugIns/CopyPathFinderExt.appex/Contents/Resources" \
+  "$APP/Contents/Library/LoginItems/Kinetics Login Launcher.app/Contents/MacOS" \
+  "$APP/Contents/Resources/Companions/Kinetics.app/Contents/MacOS" \
+  "$APP/Contents/Resources/Companions/Kinetics.app/Contents/Resources"
 cp "$BIN_DIR/Switchboard" "$APP/Contents/MacOS/Switchboard"
 cp "$ROOT/Resources/Info.plist" "$APP/Contents/Info.plist"
 cp "$ROOT/Sources/Switchboard/Resources/ModuleManifest.json" "$APP/Contents/Resources/ModuleManifest.json"
@@ -31,6 +45,22 @@ cp "$ROOT/Sources/Switchboard/Resources/WarmCornersMigrationContract.json" "$APP
 cp "$ROOT/Sources/Switchboard/Resources/InventoryBaseline.json" "$APP/Contents/Resources/InventoryBaseline.json"
 cp "$ROOT/Sources/Switchboard/Resources/RuntimeManifest.json" "$APP/Contents/Resources/RuntimeManifest.json"
 cp "$ROOT/Resources/com.ivogundlach.switchboard.agent.plist" "$APP/Contents/Library/LaunchAgents/com.ivogundlach.switchboard.agent.plist"
+KINETICS_HELPER_APP="$APP/Contents/Library/LoginItems/Kinetics Login Launcher.app"
+KINETICS_HELPER_EXECUTABLE="$KINETICS_HELPER_APP/Contents/MacOS/Kinetics Login Launcher"
+cp "$ROOT/Resources/KineticsLegacyLoginLauncher-Info.plist" "$KINETICS_HELPER_APP/Contents/Info.plist"
+xcrun swiftc -O -swift-version 6 -parse-as-library -target arm64-apple-macosx26.0 \
+  "$ROOT/Sources/Switchboard/Helpers/KineticsLegacyLoginLauncher/main.swift" \
+  -o "$KINETICS_HELPER_EXECUTABLE"
+chmod 0755 "$KINETICS_HELPER_EXECUTABLE"
+if strings "$KINETICS_HELPER_EXECUTABLE" | grep -Eiq 'NSWorkspace|SMAppService|register|open'; then
+  echo "Kinetics migration helper contains forbidden launch or registration behavior." >&2
+  exit 7
+fi
+KINETICS_APP="$APP/Contents/Resources/Companions/Kinetics.app"
+cp "$KINETICS_BIN" "$KINETICS_APP/Contents/MacOS/Kinetics"
+cp "$ROOT/Vendor/Kinetics/Resources/Info.plist" "$KINETICS_APP/Contents/Info.plist"
+cp "$ROOT/Vendor/Kinetics/Resources/AppIcon.icns" "$KINETICS_APP/Contents/Resources/AppIcon.icns"
+chmod 0755 "$KINETICS_APP/Contents/MacOS/Kinetics"
 COPY_PATH_APPEX="$APP/Contents/PlugIns/CopyPathFinderExt.appex"
 cp "$ROOT/Resources/CopyPathFinderExt-Info.plist" "$COPY_PATH_APPEX/Contents/Info.plist"
 cp "$ROOT/Resources/CopyPathFinderExt.entitlements" "$COPY_PATH_APPEX/Contents/Resources/CopyPathFinderExt.entitlements"
@@ -69,6 +99,8 @@ cp "$ROOT/Icon/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 
 chmod 0755 "$APP/Contents/MacOS/Switchboard"
 plutil -lint "$APP/Contents/Info.plist" >/dev/null
+plutil -lint "$KINETICS_HELPER_APP/Contents/Info.plist" >/dev/null
+plutil -lint "$KINETICS_APP/Contents/Info.plist" >/dev/null
 plutil -lint "$APP/Contents/Library/LaunchAgents/com.ivogundlach.switchboard.agent.plist" >/dev/null
 plutil -lint "$COPY_PATH_APPEX/Contents/Info.plist" >/dev/null
 plutil -lint "$COPY_PATH_APPEX/Contents/Resources/CopyPathFinderExt.entitlements" >/dev/null
@@ -76,6 +108,10 @@ codesign --force --sign "$REQUIRED_CERTIFICATE_SHA1" --entitlements "$ROOT/Resou
 codesign --force --sign "$REQUIRED_CERTIFICATE_SHA1" --identifier com.ivo.mail-assistant --options runtime --timestamp=none "$MAIL_HELPER"
 codesign --force --sign "$REQUIRED_CERTIFICATE_SHA1" --identifier com.ivogundlach.quit-on-close --options runtime --timestamp=none "$APP/Contents/Resources/Helpers/quit-on-close"
 codesign --force --sign "$REQUIRED_CERTIFICATE_SHA1" --identifier com.ivogundlach.switchboard.updater --options runtime --timestamp=none "$APP/Contents/Resources/Helpers/switchboard-updater"
+codesign --force --sign "$REQUIRED_CERTIFICATE_SHA1" --identifier com.ivogundlach.Kinetics.LoginLauncher --options runtime --timestamp=none "$KINETICS_HELPER_APP"
+codesign --force --sign "$REQUIRED_CERTIFICATE_SHA1" --identifier com.ivogundlach.Kinetics --options runtime --timestamp=none "$KINETICS_APP"
+codesign --verify --deep --strict --verbose=2 "$KINETICS_HELPER_APP"
+codesign --verify --deep --strict --verbose=2 "$KINETICS_APP"
 codesign --force --sign "$REQUIRED_CERTIFICATE_SHA1" --options runtime --timestamp=none "$APP"
 codesign --verify --deep --strict --verbose=2 "$COPY_PATH_APPEX"
 codesign --verify --deep --strict --verbose=2 "$APP"

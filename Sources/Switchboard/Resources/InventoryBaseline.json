@@ -172,6 +172,7 @@
     "com.ivo.notebooklm-sync",
     "com.ivo.school-sync",
     "com.ivogundlach.AudioDisconnectGuard",
+    "com.ivogundlach.Kinetics",
     "com.ivogundlach.Kinetics.LoginLauncher",
     "com.ivogundlach.app-repo-sync",
     "com.ivogundlach.apple-mail-draft-runner",

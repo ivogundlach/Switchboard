@@ -11,7 +11,7 @@ let package = Package(
         .executableTarget(
             name: "Switchboard",
             path: "Sources/Switchboard",
-            exclude: ["Resources"],
+            exclude: ["Resources", "Helpers"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(

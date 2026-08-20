@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+    <key>CFBundleSupportedPlatforms</key><array><string>MacOSX</string></array>
+    <key>LSUIElement</key><true/>
+    <key>CFBundleExecutable</key><string>CopyPathFinderExt</string>
+    <key>CFBundleIdentifier</key><string>com.ivo.CopyPath.FinderExt</string>
+    <key>CFBundleName</key><string>CopyPathFinderExt</string>
+    <key>CFBundleDisplayName</key><string>Copy Path</string>
+    <key>CFBundlePackageType</key><string>XPC!</string>
+    <key>CFBundleShortVersionString</key><string>1.0</string>
+    <key>CFBundleVersion</key><string>1</string>
+    <key>LSMinimumSystemVersion</key><string>26.0</string>
+    <key>NSExtension</key>
+    <dict>
+        <key>NSExtensionAttributes</key><dict/>
+        <key>NSExtensionPointIdentifier</key><string>com.apple.FinderSync</string>
+        <key>NSExtensionPrincipalClass</key><string>CopyPathFinderExt.FinderSync</string>
+    </dict>
+</dict>
+</plist>

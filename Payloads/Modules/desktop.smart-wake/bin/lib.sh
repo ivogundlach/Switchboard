@@ -344,10 +344,20 @@ with open(temporary, "w", encoding="utf-8") as handle:
 os.chmod(temporary, 0o600)
 os.replace(temporary, path)
 PY
-        launchctl kickstart -k "gui/$(id -u)/${DISCORD_WATCHER_LABEL}" >/dev/null 2>&1 || {
-            log_msg "Discord notification created, but reply watcher could not start; alert will not be reposted"
-            return 0
-        }
+        if [ "${SWITCHBOARD_MODULE_ID:-}" = "desktop.smart-wake" ]; then
+            if [ -f "${SMART_WAKE_CODE_DIR}/discord-command-watch.py" ]; then
+                nohup /usr/bin/python3 "${SMART_WAKE_CODE_DIR}/discord-command-watch.py" \
+                    </dev/null >>"${LOG_FILE}" 2>>"${ERR_FILE}" &
+            else
+                log_msg "Discord notification created, but bundled reply watcher is missing"
+                return 0
+            fi
+        else
+            launchctl kickstart -k "gui/$(id -u)/${DISCORD_WATCHER_LABEL}" >/dev/null 2>&1 || {
+                log_msg "Discord notification created, but reply watcher could not start; alert will not be reposted"
+                return 0
+            }
+        fi
         log_msg "Confirmed Discord notification creation"
         return 0
     fi

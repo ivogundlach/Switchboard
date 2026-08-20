@@ -1,4 +1,5 @@
 import CoreGraphics
+import Foundation
 import Testing
 @testable import Switchboard
 
@@ -60,6 +61,33 @@ struct DesktopControllerTests {
         audio.stop()
         #expect(!audio.isRunning)
     }
+
+    @Test
+    func copyPathEnableAndDisableUseOnlyTheCanonicalExtensionIdentity() throws {
+        let runner = RecordingCopyPathRunner()
+        let controller = CopyPathController(commandRunner: runner)
+        let canonical = CopyPathController.canonicalAppURL
+
+        try controller.enable(bundleURL: canonical)
+        try controller.disable(bundleURL: canonical)
+
+        #expect(runner.calls == [
+            .init(executable: CopyPathController.pluginkitPath, arguments: ["-a", CopyPathController.canonicalExtensionURL.path]),
+            .init(executable: CopyPathController.pluginkitPath, arguments: ["-e", "use", "-i", CopyPathController.extensionIdentifier]),
+            .init(executable: CopyPathController.pluginkitPath, arguments: ["-e", "disable", "-i", CopyPathController.extensionIdentifier]),
+        ])
+    }
+
+    @Test
+    func copyPathRejectsNonCanonicalBundleBeforeRunningPluginkit() {
+        let runner = RecordingCopyPathRunner()
+        let controller = CopyPathController(commandRunner: runner)
+
+        #expect(throws: CopyPathActivationError.self) {
+            try controller.enable(bundleURL: URL(fileURLWithPath: "/tmp/Switchboard.app"))
+        }
+        #expect(runner.calls.isEmpty)
+    }
 }
 
 private final class RecordingBrightnessAPI: BrightnessDisplayAPI {
@@ -73,5 +101,19 @@ private final class RecordingBrightnessAPI: BrightnessDisplayAPI {
     func setBrightness(_ level: Float, for displayID: CGDirectDisplayID) -> Bool {
         values.append((displayID, level))
         return true
+    }
+}
+
+private final class RecordingCopyPathRunner: CopyPathCommandRunning {
+    struct Call: Equatable {
+        let executable: String
+        let arguments: [String]
+    }
+
+    private(set) var calls: [Call] = []
+
+    func run(executable: String, arguments: [String]) throws -> CopyPathCommandResult {
+        calls.append(.init(executable: executable, arguments: arguments))
+        return CopyPathCommandResult(status: 0, stdout: "", stderr: "")
     }
 }

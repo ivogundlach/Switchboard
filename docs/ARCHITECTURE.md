@@ -6,13 +6,13 @@ Switchboard is a menu-bar app with a manifest-driven module catalog for macOS 26
 
 `Sources/Switchboard/main.swift` handles self-test or starts the AppKit app. `AppDelegate.swift` owns setup. `Views/` owns the menu-bar interface. `Models/ModuleDefinition.swift` defines module ownership and availability; `Models/ModuleStore.swift` loads the manifest and routes every enable or relaunch through the migration/status gate.
 
-Ready modules are Warm Corners, Audio Disconnect Guard, Quit on Close, Mac Brightness, Mail Assistant, AutoInstall DMG, Copy Safari URL, Local Read Connectors, Memory System, Codex & System Improvement, Repository & Release Automation, NotebookLM Sync, Backup Coverage Audit, and Advanced Commands. Planned modules are Kinetics, Smart Wake, and Copy Path. Planned entries are not enabled features.
+Ready modules are Warm Corners, Audio Disconnect Guard, Quit on Close, Mac Brightness, Smart Wake core wake/network/display-lock behavior, Mail Assistant, AutoInstall DMG, Copy Safari URL, Copy Path, Local Read Connectors, Memory System, Codex & System Improvement, Repository & Release Automation, NotebookLM Sync, Backup Coverage Audit, and Advanced Commands. Planned module is Kinetics. Smart Wake's privileged sleep guard remains separately retained because it consumes the existing user-state lease; iMessage remains unresolved and is not migrated.
 
 Standalone products and their workers remain in their own bundles and DMGs. Safari apps remain separate. Third-party utilities and general Apple Shortcuts are outside this catalog.
 
 ## Agent, payloads, and Services
 
-The single Switchboard background agent schedules enabled work. The app bundle carries sanitized command payloads and macOS Services. Activation is serialized and ownership-checked; it never silently absorbs a standalone worker or Safari app.
+The single Switchboard background agent schedules enabled work. The app bundle carries sanitized command payloads, macOS Services, and the Copy Path Finder Sync extension. Activation is serialized and ownership-checked; it never silently absorbs a standalone worker or Safari app.
 
 ## Migration and recovery
 
@@ -26,4 +26,4 @@ The update services discover a published GitHub release, download the signed man
 
 ## Self-test
 
-`Services/SelfTest.swift` and the manifest validator check resources, schema, unique IDs, ready/planned availability, ownership boundaries, bundled commands and Services, runtime jobs, and migration inventories. The updater is verified by its focused tests. The current suite has **96 tests in 16 suites**.
+`Services/SelfTest.swift` and the manifest validator check resources, schema, unique IDs, ready/planned availability, ownership boundaries, bundled commands and Services, runtime jobs, and migration inventories. The updater is verified by its focused tests. The current suite has **98 tests in 16 suites**.

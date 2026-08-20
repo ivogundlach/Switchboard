@@ -21,7 +21,9 @@ swift build --package-path "$ROOT" -c release
 BIN_DIR="$(swift build --package-path "$ROOT" -c release --show-bin-path)"
 
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Library/LaunchAgents"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Library/LaunchAgents" \
+  "$APP/Contents/PlugIns/CopyPathFinderExt.appex/Contents/MacOS" \
+  "$APP/Contents/PlugIns/CopyPathFinderExt.appex/Contents/Resources"
 cp "$BIN_DIR/Switchboard" "$APP/Contents/MacOS/Switchboard"
 cp "$ROOT/Resources/Info.plist" "$APP/Contents/Info.plist"
 cp "$ROOT/Sources/Switchboard/Resources/ModuleManifest.json" "$APP/Contents/Resources/ModuleManifest.json"
@@ -29,6 +31,15 @@ cp "$ROOT/Sources/Switchboard/Resources/WarmCornersMigrationContract.json" "$APP
 cp "$ROOT/Sources/Switchboard/Resources/InventoryBaseline.json" "$APP/Contents/Resources/InventoryBaseline.json"
 cp "$ROOT/Sources/Switchboard/Resources/RuntimeManifest.json" "$APP/Contents/Resources/RuntimeManifest.json"
 cp "$ROOT/Resources/com.ivogundlach.switchboard.agent.plist" "$APP/Contents/Library/LaunchAgents/com.ivogundlach.switchboard.agent.plist"
+COPY_PATH_APPEX="$APP/Contents/PlugIns/CopyPathFinderExt.appex"
+cp "$ROOT/Resources/CopyPathFinderExt-Info.plist" "$COPY_PATH_APPEX/Contents/Info.plist"
+cp "$ROOT/Resources/CopyPathFinderExt.entitlements" "$COPY_PATH_APPEX/Contents/Resources/CopyPathFinderExt.entitlements"
+xcrun swiftc -O -swift-version 6 -target arm64-apple-macosx26.0 \
+  -application-extension -parse-as-library -module-name CopyPathFinderExt \
+  -D COPY_PATH_FINDER_EXTENSION \
+  "$ROOT/Sources/Switchboard/Modules/CopyPath/FinderSync.swift" \
+  -Xlinker -e -Xlinker _NSExtensionMain -framework FinderSync -framework Cocoa \
+  -o "$COPY_PATH_APPEX/Contents/MacOS/CopyPathFinderExt"
 mkdir -p "$APP/Contents/Resources/Modules" "$APP/Contents/Resources/Services" "$APP/Contents/Resources/Helpers"
 cp -R "$ROOT/Payloads/Modules/." "$APP/Contents/Resources/Modules/"
 cp -R "$ROOT/Payloads/Services/." "$APP/Contents/Resources/Services/"
@@ -59,10 +70,14 @@ cp "$ROOT/Icon/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 chmod 0755 "$APP/Contents/MacOS/Switchboard"
 plutil -lint "$APP/Contents/Info.plist" >/dev/null
 plutil -lint "$APP/Contents/Library/LaunchAgents/com.ivogundlach.switchboard.agent.plist" >/dev/null
+plutil -lint "$COPY_PATH_APPEX/Contents/Info.plist" >/dev/null
+plutil -lint "$COPY_PATH_APPEX/Contents/Resources/CopyPathFinderExt.entitlements" >/dev/null
+codesign --force --sign "$REQUIRED_CERTIFICATE_SHA1" --entitlements "$ROOT/Resources/CopyPathFinderExt.entitlements" --identifier com.ivo.CopyPath.FinderExt --options runtime --timestamp=none "$COPY_PATH_APPEX"
 codesign --force --sign "$REQUIRED_CERTIFICATE_SHA1" --identifier com.ivo.mail-assistant --options runtime --timestamp=none "$MAIL_HELPER"
 codesign --force --sign "$REQUIRED_CERTIFICATE_SHA1" --identifier com.ivogundlach.quit-on-close --options runtime --timestamp=none "$APP/Contents/Resources/Helpers/quit-on-close"
 codesign --force --sign "$REQUIRED_CERTIFICATE_SHA1" --identifier com.ivogundlach.switchboard.updater --options runtime --timestamp=none "$APP/Contents/Resources/Helpers/switchboard-updater"
 codesign --force --sign "$REQUIRED_CERTIFICATE_SHA1" --options runtime --timestamp=none "$APP"
+codesign --verify --deep --strict --verbose=2 "$COPY_PATH_APPEX"
 codesign --verify --deep --strict --verbose=2 "$APP"
 requirement="$(codesign -d -r- "$APP" 2>&1 | tr '[:upper:]' '[:lower:]')"
 expected_leaf="$(printf '%s' "$REQUIRED_CERTIFICATE_SHA1" | tr '[:upper:]' '[:lower:]')"

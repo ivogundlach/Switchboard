@@ -1,6 +1,6 @@
 # Contributing to Switchboard
 
-Switchboard is a public MIT project for **macOS 26 on Apple silicon**. The catalog contains ready modules and three planned entries; planned entries are not implemented features.
+Switchboard is a public MIT project for **macOS 26 on Apple silicon**. The catalog contains ready modules and one planned entry, Kinetics; planned entries are not implemented features.
 
 ## Before you start
 
@@ -12,11 +12,11 @@ swift test
 build/Switchboard.app/Contents/MacOS/Switchboard --self-test
 ```
 
-The suite currently reports **96 tests in 16 suites**. The build makes a local, non-installed app. The release script remains blocked until an Apple Developer ID certificate and the required notarization setup are available; do not add ad-hoc signing or an install step.
+The suite currently reports **98 tests in 16 suites**. The build makes a local, non-installed app. The release script remains blocked until an Apple Developer ID certificate and the required notarization setup are available; do not add ad-hoc signing or an install step.
 
 ## Ownership boundary
 
-Ready modules are Warm Corners, Audio Disconnect Guard, Quit on Close, Mac Brightness, Mail Assistant, AutoInstall DMG, Copy Safari URL, Local Read Connectors, Memory System, Codex & System Improvement, Repository & Release Automation, NotebookLM Sync, Backup Coverage Audit, and Advanced Commands. Planned modules are Kinetics, Smart Wake, and Copy Path.
+Ready modules are Warm Corners, Audio Disconnect Guard, Quit on Close, Mac Brightness, Smart Wake core wake/network/display-lock behavior, Mail Assistant, AutoInstall DMG, Copy Safari URL, Copy Path, Local Read Connectors, Memory System, Codex & System Improvement, Repository & Release Automation, NotebookLM Sync, Backup Coverage Audit, and Advanced Commands. Kinetics remains planned. Smart Wake's privileged sleep guard remains in place, and its unresolved iMessage path is not migrated.
 
 Switchboard has one background agent. It owns sanitized bundled command payloads and macOS Services. Command, service, and scheduler migration is recoverable and supports rollback; current migration does not delete legacy items.
 

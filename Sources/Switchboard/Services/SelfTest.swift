@@ -11,6 +11,16 @@ enum SelfTest {
 
         let manifest = try JSONDecoder().decode(ModuleManifest.self, from: Data(contentsOf: manifestURL))
         try ManifestValidator.validate(manifest)
+        guard let smartWake = manifest.modules.first(where: { $0.id == "desktop.smart-wake" }),
+              smartWake.availability == .ready,
+              smartWake.legacyLabels == ["com.user.smartwake", "com.user.smartwake.discord"] else {
+            throw SelfTestError.smartWakeReadiness
+        }
+        let smartWakeComponents = manifest.scheduledComponents.filter { $0.owner == "switchboard:desktop.smart-wake" }
+        guard smartWakeComponents.contains(where: { $0.label == "com.user.smartwake.sleep-guard" && $0.cadence.contains("retained outside generic migration") }),
+              smartWakeComponents.contains(where: { $0.label == "com.user.smartwake.imessage" && $0.cadence.contains("source unresolved") }) else {
+            throw SelfTestError.smartWakeReadiness
+        }
         let baseline = try JSONDecoder().decode(InventoryBaseline.self, from: Data(contentsOf: baselineURL))
         try baseline.validate(manifest)
         let runtime = try JSONDecoder().decode(RuntimeManifest.self, from: Data(contentsOf: runtimeURL))
@@ -60,6 +70,8 @@ enum SelfTest {
             }
         }
 
+        try validateCopyPathExtension(bundleURL: Bundle.main.bundleURL)
+
         let contract = try JSONDecoder().decode(
             WarmCornersMigrationContract.self,
             from: Data(contentsOf: contractURL)
@@ -75,6 +87,36 @@ enum SelfTest {
               !contract.dataContract.snapshot.isEmpty,
               !contract.retirement.restoreSource.isEmpty else {
             throw SelfTestError.invalidPilotContract
+        }
+    }
+
+    private static func validateCopyPathExtension(bundleURL: URL) throws {
+        let appex = bundleURL
+            .appending(path: "Contents/PlugIns/CopyPathFinderExt.appex", directoryHint: .isDirectory)
+        let values = try appex.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+        guard values.isDirectory == true, values.isSymbolicLink != true else {
+            throw SelfTestError.missingCopyPathExtension
+        }
+        let infoURL = appex.appending(path: "Contents/Info.plist")
+        let infoData = try Data(contentsOf: infoURL)
+        let info = try PropertyListSerialization.propertyList(from: infoData, options: [], format: nil) as? [String: Any]
+        guard info?["CFBundleIdentifier"] as? String == CopyPathController.extensionIdentifier,
+              info?["CFBundleExecutable"] as? String == "CopyPathFinderExt",
+              info?["NSExtension"] is [String: Any] else {
+            throw SelfTestError.invalidCopyPathExtension
+        }
+        let executable = appex.appending(path: "Contents/MacOS/CopyPathFinderExt")
+        let executableValues = try executable.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .isExecutableKey])
+        guard executableValues.isRegularFile == true,
+              executableValues.isSymbolicLink != true,
+              executableValues.isExecutable == true else {
+            throw SelfTestError.missingCopyPathExtension
+        }
+        let entitlementsURL = appex.appending(path: "Contents/Resources/CopyPathFinderExt.entitlements")
+        let entitlementData = try Data(contentsOf: entitlementsURL)
+        let entitlements = try PropertyListSerialization.propertyList(from: entitlementData, options: [], format: nil) as? [String: Any]
+        guard entitlements?["com.apple.security.app-sandbox"] as? Bool == true else {
+            throw SelfTestError.invalidCopyPathExtension
         }
     }
 }
@@ -228,6 +270,7 @@ enum SelfTestError: LocalizedError {
     case safariOverlap
     case invalidPilotSet
     case invalidPilotContract
+    case smartWakeReadiness
     case shortcutBoundary
     case duplicateOwnedItem
     case invalidOwnerReference
@@ -237,6 +280,8 @@ enum SelfTestError: LocalizedError {
     case missingRuntimeExecutable(String)
     case missingBundledCommand(String)
     case missingBundledService(String)
+    case missingCopyPathExtension
+    case invalidCopyPathExtension
 
     var errorDescription: String? {
         switch self {
@@ -247,6 +292,7 @@ enum SelfTestError: LocalizedError {
         case .safariOverlap: "A separate Safari app was also assigned to Switchboard."
         case .invalidPilotSet: "Warm Corners must be the only pilot module."
         case .invalidPilotContract: "The Warm Corners migration contract is invalid."
+        case .smartWakeReadiness: "Smart Wake core readiness or legacy scheduler boundaries are invalid."
         case .shortcutBoundary: "The Apple Shortcut boundary is invalid."
         case .duplicateOwnedItem: "A process, command, tool, or service has more than one owner."
         case .invalidOwnerReference: "A component refers to an unknown owner."
@@ -256,6 +302,8 @@ enum SelfTestError: LocalizedError {
         case .missingRuntimeExecutable(let label): "The bundled runtime executable for \(label) is missing."
         case .missingBundledCommand(let name): "The bundled command \(name) is missing or unsafe."
         case .missingBundledService(let name): "The bundled macOS Service \(name) is missing or unsafe."
+        case .missingCopyPathExtension: "The bundled Copy Path Finder Sync extension is missing or unsafe."
+        case .invalidCopyPathExtension: "The bundled Copy Path Finder Sync extension identity or entitlement is invalid."
         }
     }
 }

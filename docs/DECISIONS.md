@@ -4,11 +4,11 @@ These boundaries describe the current product, not a promise that every catalog 
 
 ## Product and module boundary
 
-Switchboard is one menu-bar app for general-purpose Mac utilities with one background agent. Ready modules are Warm Corners, Audio Disconnect Guard, Quit on Close, Mac Brightness, Mail Assistant, AutoInstall DMG, Copy Safari URL, Local Read Connectors, Memory System, Codex & System Improvement, Repository & Release Automation, NotebookLM Sync, Backup Coverage Audit, and Advanced Commands. Kinetics, Smart Wake, and Copy Path are planned and remain unavailable.
+Switchboard is one menu-bar app for general-purpose Mac utilities with one background agent. Smart Wake core wake/network/display-lock behavior is now ready alongside the existing ready modules. Its privileged sleep guard remains outside generic migration because it consumes the same user-state lease, while iMessage remains unresolved and is not migrated. Kinetics remains planned; Copy Path is now a bundled ready module.
 
 ## Bundled operations
 
-Sanitized command payloads and macOS Services ship inside the Switchboard bundle. Command, service, and scheduler migration is recoverable: it records intent, verifies each replacement, and can roll back. The current migration path does not delete legacy items.
+Sanitized command payloads, macOS Services, and the Copy Path Finder Sync extension ship inside the Switchboard bundle. Command, service, scheduler, and extension activation is recoverable: it records intent, verifies each replacement, and can roll back. The current migration path does not delete legacy items or the existing Copy Path host app.
 
 ## Separate products and integrations
 

@@ -2,7 +2,7 @@
 
 ## Supported status
 
-Switchboard is an unreleased project with ready modules and three planned modules: Kinetics, Smart Wake, and Copy Path. There is no public DMG or production installation supported today.
+Switchboard is an unreleased project with ready modules and one planned module, Kinetics. Smart Wake's core behavior and Copy Path are ready, but there is no public DMG or production installation supported today.
 
 ## Reporting a vulnerability
 

@@ -13,6 +13,7 @@ final class ModuleStore {
     private let warmCornerRuntime: WarmCornerRuntime
     private let audioGuard = AudioDisconnectGuardController()
     let brightness = BrightnessController()
+    private let copyPath = CopyPathController()
     let updates = UpdateCoordinator()
     private let agentRegistration = AgentRegistration()
     private let commandActivation = BundledCommandActivation()
@@ -75,6 +76,12 @@ final class ModuleStore {
                 audioGuard.start()
             case "desktop.brightness":
                 brightness.start()
+            case "files.copy-path":
+                do {
+                    try copyPath.enable(bundleURL: Bundle.main.bundleURL)
+                } catch {
+                    lastError = "Copy Path could not be enabled: \(error.localizedDescription)"
+                }
             default:
                 break
             }
@@ -245,6 +252,7 @@ final class ModuleStore {
 
         var commandsActivated = false
         var servicesActivated = false
+        var copyPathActivated = false
         do {
             if !commandNames.isEmpty {
                 try commandActivation.enable(
@@ -260,6 +268,10 @@ final class ModuleStore {
                     serviceNames: serviceNames
                 )
                 servicesActivated = true
+            }
+            if module.id == "files.copy-path" {
+                try copyPath.enable(bundleURL: Bundle.main.bundleURL)
+                copyPathActivated = true
             }
             if ownsScheduledJobs {
                 // Registration may start the shared agent, but this module is
@@ -286,6 +298,9 @@ final class ModuleStore {
                     serviceNames: serviceNames
                 )
             }
+            if copyPathActivated {
+                try? copyPath.disable(bundleURL: Bundle.main.bundleURL)
+            }
             if commandsActivated {
                 try? commandActivation.disable(
                     bundleURL: Bundle.main.bundleURL,
@@ -304,6 +319,9 @@ final class ModuleStore {
         let commandNames = commands(for: module)
         let serviceNames = services(for: module).map(\.name)
         do {
+            if module.id == "files.copy-path" {
+                try copyPath.disable(bundleURL: Bundle.main.bundleURL)
+            }
             if !serviceNames.isEmpty, CanonicalInstallGate.isCanonical() {
                 try serviceActivation.disable(
                     bundleURL: Bundle.main.bundleURL,

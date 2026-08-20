@@ -11,6 +11,15 @@ if CommandLine.arguments.contains("--self-test") {
     }
 }
 
+if CommandLine.arguments.contains("--agent") {
+    do {
+        try SwitchboardAgent().run()
+    } catch {
+        fputs("Switchboard agent: FAIL — \(error.localizedDescription)\n", stderr)
+        exit(EXIT_FAILURE)
+    }
+}
+
 MainActor.assumeIsolated {
     let application = NSApplication.shared
     let delegate = AppDelegate()

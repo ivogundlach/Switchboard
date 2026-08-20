@@ -12,6 +12,9 @@ struct ModuleDetailView: View {
                 if module.id == "desktop.warm-corners" {
                     WarmCornersSettingsView(store: store)
                 }
+                if module.id == "desktop.brightness" {
+                    BrightnessSettingsView(store: store)
+                }
                 details
                 inventory
             }
@@ -121,6 +124,35 @@ struct ModuleDetailView: View {
             }
         }
         .padding(.top, 8)
+    }
+}
+
+private struct BrightnessSettingsView: View {
+    @Bindable var store: ModuleStore
+    @State private var resultText = "Choose a preset"
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Display brightness").font(.system(size: 15, weight: .semibold))
+                Text(resultText).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("Night · 30%") { apply(store.brightness.setNight()) }
+            Button("Day · 100%") { apply(store.brightness.setDay()) }
+                .buttonStyle(.borderedProminent)
+        }
+        .padding(18)
+        .switchboardPanel()
+    }
+
+    private func apply(_ result: BrightnessResult) {
+        switch result {
+        case .applied(let level, let count):
+            resultText = "Set \(count) display\(count == 1 ? "" : "s") to \(Int(level * 100))%"
+        case .failed(let message):
+            resultText = message
+        }
     }
 }
 

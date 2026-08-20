@@ -1,0 +1,166 @@
+#!/bin/bash
+set -u
+
+NAME="smart-wake-diagnose"
+VERSION="1.0.0"
+if [ "${SMART_WAKE_DIAG_TEST_MODE:-0}" = "1" ]; then
+    SMART_WAKE_HOME="${SMART_WAKE_DIAG_HOME:?SMART_WAKE_DIAG_HOME is required in test mode}"
+    SOURCE_HOME="${SMART_WAKE_DIAG_SOURCE_HOME:?SMART_WAKE_DIAG_SOURCE_HOME is required in test mode}"
+    HELPER="${SMART_WAKE_DIAG_HELPER:?SMART_WAKE_DIAG_HELPER is required in test mode}"
+    LABEL="${SMART_WAKE_DIAG_LABEL:-com.user.smartwake.sleep-guard}"
+else
+    HOME_DIR="${HOME:-$(cd && pwd -P)}"
+    SMART_WAKE_HOME="${SMART_WAKE_DIAG_HOME:-${HOME_DIR}/.config/smart-wake}"
+    SOURCE_HOME="${SMART_WAKE_DIAG_SOURCE_HOME:-${HOME_DIR}/Projects/smart-wake}"
+    HELPER="/Library/PrivilegedHelperTools/com.user.smartwake.sleep-guard"
+    LABEL="com.user.smartwake.sleep-guard"
+fi
+STATUS_FILE="${SMART_WAKE_HOME}/state/status.env"
+
+usage() {
+    cat <<'EOF'
+Usage: smart-wake-diagnose [--check|--help|--version]
+
+Print a credential-safe Smart Wake health report. --check also runs the
+deterministic regression checks. Credential contents and network names are
+never read or printed.
+EOF
+}
+
+case "${1:-}" in
+    --version|-V)
+        printf '%s %s\n' "$NAME" "$VERSION"
+        exit 0
+        ;;
+    --help|-h)
+        usage
+        exit 0
+        ;;
+    --check|'') ;;
+    *)
+        printf 'Unknown argument: %s\n' "$1" >&2
+        usage >&2
+        exit 2
+        ;;
+esac
+
+run_checks=false
+[ "${1:-}" = "--check" ] && run_checks=true
+failures=0
+
+section() {
+    printf '\n--- %s ---\n' "$1"
+}
+
+printf 'Smart Wake diagnostic report: %s\n' "$(/bin/date '+%Y-%m-%d %H:%M:%S %z')"
+
+section "protected helper"
+if helper_state=$(/bin/launchctl print "system/${LABEL}" 2>&1); then
+    printf '%s\n' "$helper_state" | /usr/bin/awk '
+        /^[[:space:]]*(state|pid|runs|last exit code|job state) =/ { print }
+    '
+    if ! printf '%s\n' "$helper_state" | /usr/bin/grep -q 'state = running'; then
+        printf 'ERROR: protected helper is registered but not running\n'
+        failures=$((failures + 1))
+    fi
+else
+    printf 'ERROR: protected helper is unavailable\n'
+    failures=$((failures + 1))
+fi
+
+section "power state"
+/usr/bin/pmset -g | /usr/bin/grep -E 'SleepDisabled|^[[:space:]]*(sleep|displaysleep|networkoversleep)[[:space:]]' || true
+
+section "Smart Wake decision"
+if [ -f "$STATUS_FILE" ]; then
+    /usr/bin/awk -F= '
+        /^UPDATED_AT=/ { print "UPDATED_AT=[present]"; next }
+        /^NOW=/ { if ($2 ~ /^[0-9]+$/) print; else print "NOW=[invalid]"; next }
+        /^KEEP_AWAKE=/ { if ($2 ~ /^(true|false)$/) print; else print "KEEP_AWAKE=[invalid]"; next }
+        /^REASON=/ { print "REASON=[redacted]"; next }
+        /^MODE=/ { if ($2 ~ /^(ac|battery)$/) print; else print "MODE=[invalid]"; next }
+        /^SSID=/ { print "SSID=[redacted]"; next }
+        /^(TRUSTED_WIFI|AC_POWER)=/ { if ($2 ~ /^(true|false)$/) print; else print $1 "=[invalid]"; next }
+        /^BATTERY_PERCENT=/ { if ($2 ~ /^[0-9]+$/) print; else print "BATTERY_PERCENT=[invalid]"; next }
+        /^OVERRIDE_UNTIL=/ { print "OVERRIDE_UNTIL=[redacted]"; next }
+        /^COOLDOWN_UNTIL=/ { print "COOLDOWN_UNTIL=[redacted]"; next }
+    ' "$STATUS_FILE"
+else
+    printf 'ERROR: Smart Wake status file is missing\n'
+    failures=$((failures + 1))
+fi
+
+section "deployed/source identity"
+for relative in install-sleep-guard.sh lib.sh sleep-guard-root.sh smart-wake.sh tests/smart-wake-test.sh; do
+    source_path="${SOURCE_HOME}/${relative}"
+    live_path="${SMART_WAKE_HOME}/${relative}"
+    if [ ! -f "$source_path" ] || [ ! -f "$live_path" ]; then
+        printf 'ERROR: missing %s\n' "$relative"
+        failures=$((failures + 1))
+        continue
+    fi
+    source_hash=$(/usr/bin/shasum -a 256 "$source_path" | /usr/bin/awk '{print $1}')
+    live_hash=$(/usr/bin/shasum -a 256 "$live_path" | /usr/bin/awk '{print $1}')
+    if [ "$source_hash" = "$live_hash" ]; then
+        printf 'match %s\n' "$relative"
+    else
+        printf 'ERROR: deployed copy differs: %s\n' "$relative"
+        failures=$((failures + 1))
+    fi
+done
+
+if [ -f "$HELPER" ] && [ -f "${SOURCE_HOME}/sleep-guard-root.sh" ]; then
+    helper_hash=$(/usr/bin/shasum -a 256 "$HELPER" | /usr/bin/awk '{print $1}')
+    source_helper_hash=$(/usr/bin/shasum -a 256 "${SOURCE_HOME}/sleep-guard-root.sh" | /usr/bin/awk '{print $1}')
+    if [ "$helper_hash" = "$source_helper_hash" ]; then
+        printf 'match protected helper\n'
+    else
+        printf 'ERROR: protected helper differs from source\n'
+        failures=$((failures + 1))
+    fi
+else
+    printf 'ERROR: protected helper or source is missing\n'
+    failures=$((failures + 1))
+fi
+
+section "credential-file metadata"
+if [ -n "${SMART_WAKE_CREDENTIAL_PATHS:-}" ]; then
+    IFS=':' read -r -a credential_paths <<< "$SMART_WAKE_CREDENTIAL_PATHS"
+    for credential_path in "${credential_paths[@]}"; do
+        [ -n "$credential_path" ] || continue
+        if [ -f "$credential_path" ]; then
+            /usr/bin/stat -f '%N mode=%Sp modified=%Sm size=%z' -t '%Y-%m-%d %H:%M:%S %z' "$credential_path"
+        else
+            printf 'ERROR: missing configured credential path %s\n' "$credential_path"
+            failures=$((failures + 1))
+        fi
+    done
+else
+    printf 'credential metadata skipped (set SMART_WAKE_CREDENTIAL_PATHS to inspect configured files)\n'
+fi
+
+section "helper-log metadata"
+for log_path in /var/log/smart-wake-sleep-guard.log /var/log/smart-wake-sleep-guard.err; do
+    if [ -f "$log_path" ]; then
+        /usr/bin/stat -f '%N modified=%Sm size=%z' -t '%Y-%m-%d %H:%M:%S %z' "$log_path"
+    else
+        printf 'missing %s\n' "$log_path"
+    fi
+done
+
+if [ "$run_checks" = true ]; then
+    section "regression checks"
+    if /bin/bash "${SMART_WAKE_HOME}/tests/smart-wake-test.sh"; then
+        :
+    else
+        failures=$((failures + 1))
+    fi
+fi
+
+section "result"
+if [ "$failures" -eq 0 ]; then
+    printf 'Smart Wake health checks passed\n'
+    exit 0
+fi
+printf 'Smart Wake health checks found %s failure(s)\n' "$failures"
+exit 1

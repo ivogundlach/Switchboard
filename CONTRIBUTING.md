@@ -1,10 +1,10 @@
 # Contributing to Switchboard
 
-Switchboard is a public MIT project for **macOS 26 on Apple silicon**. The source is public, but the first release is still an unreleased Warm Corners pilot. Other manifest entries are not implemented as available modules.
+Switchboard is a public MIT project for **macOS 26 on Apple silicon**. The catalog contains ready modules and three planned entries; planned entries are not implemented features.
 
 ## Before you start
 
-Use a clean local checkout and keep unrelated work untouched. From `$HOME/Projects/Switchboard`:
+From the repository root, run:
 
 ```bash
 swift test
@@ -12,16 +12,22 @@ swift test
 build/Switchboard.app/Contents/MacOS/Switchboard --self-test
 ```
 
-The local build uses the established `Ivo Market Dev` identity for continuity. It is not a public-release signature. Do not install the app as part of development.
+The suite currently reports **96 tests in 16 suites**. The build makes a local, non-installed app. The release script remains blocked until an Apple Developer ID certificate and the required notarization setup are available; do not add ad-hoc signing or an install step.
 
 ## Ownership boundary
 
-Warm Corners is the only current pilot. The manifest is the source of truth for module ownership and availability. Market, School, Tool Dashboard, Vitals, UsageQueue, ReleaseRadar, NutrientTracker, Psephos, Tax Simulator, and Runway remain separate products, with their workers in their own DMGs. ForceCopyPaste, NewTabLinks, and YouTube Defaults remain separate Safari apps. Third-party utilities and general Apple Shortcuts remain outside Switchboard.
+Ready modules are Warm Corners, Audio Disconnect Guard, Quit on Close, Mac Brightness, Mail Assistant, AutoInstall DMG, Copy Safari URL, Local Read Connectors, Memory System, Codex & System Improvement, Repository & Release Automation, NotebookLM Sync, Backup Coverage Audit, and Advanced Commands. Planned modules are Kinetics, Smart Wake, and Copy Path.
 
-Changes touching migration, helpers, signing, updates, local-read access, or Mail access need an explicit explanation of the permission and rollback effect. Do not broaden a permission experiment after an unexpected prompt, denial, identity change, or behavior change.
+Switchboard has one background agent. It owns sanitized bundled command payloads and macOS Services. Command, service, and scheduler migration is recoverable and supports rollback; current migration does not delete legacy items.
+
+Standalone products and their workers stay in their own app bundles and DMGs. Safari apps stay separate. Third-party utilities and general Apple Shortcuts remain outside Switchboard.
+
+## Updates and releases
+
+The update implementation discovers a published GitHub release, downloads and verifies its manifest and DMG hash, invokes the nested updater, and can roll back from a verified recovery copy. The release workflow requires Developer ID signing and notarization. There is currently no public DMG or public release.
 
 ## Issues and pull requests
 
-Open an issue for a reproducible problem. Include the macOS version, Apple-silicon status, the module and availability state involved, exact reproduction steps, and relevant self-test output. Do not include secrets, personal paths, private account data, or copied runtime data.
+Open an issue for a reproducible problem. Include the macOS version, Apple-silicon status, module and availability state, exact reproduction steps, and relevant self-test output. Do not include secrets, personal paths, private account data, or copied runtime data.
 
-Pull requests should be narrow, explain the user-visible effect, preserve the ownership boundary, and include the commands run and their results. Do not claim a planned module is implemented. Do not add an install step, ad-hoc signing, or a public release artifact to a code change.
+Pull requests should be narrow, explain the user-visible effect, preserve ownership boundaries, and include commands run and their results. Do not claim a planned module is implemented or that a public release exists.

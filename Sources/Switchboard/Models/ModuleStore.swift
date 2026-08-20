@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 import ServiceManagement
@@ -10,7 +11,18 @@ final class ModuleStore {
     let manifest: ModuleManifest
     let warmCorners: WarmCornerSettings
     private let warmCornerRuntime: WarmCornerRuntime
+    private let audioGuard = AudioDisconnectGuardController()
+    let brightness = BrightnessController()
+    let updates = UpdateCoordinator()
+    private let agentRegistration = AgentRegistration()
+    private let commandActivation = BundledCommandActivation()
+    private let serviceActivation = BundledServiceActivation()
+    private let scheduledModuleIDs: Set<String>
     private let operationCoordinator = OperationCoordinator()
+    private let applicationSupportURL = FileManager.default.urls(
+        for: .applicationSupportDirectory,
+        in: .userDomainMask
+    )[0].appending(path: "Switchboard", directoryHint: .isDirectory)
     @ObservationIgnored
     private lazy var warmCornersMigration: WarmCornersMigrationService = {
         let applicationSupport = FileManager.default.urls(
@@ -41,6 +53,7 @@ final class ModuleStore {
         enabledModuleIDs = Set(UserDefaults.standard.stringArray(forKey: Self.enabledKey) ?? [])
         warmCorners = WarmCornerSettings()
         warmCornerRuntime = WarmCornerRuntime(settings: warmCorners)
+        scheduledModuleIDs = Self.loadScheduledModuleIDs()
 
         let validIDs = Set(manifest.modules.map(\.id))
         enabledModuleIDs.formIntersection(validIDs)
@@ -54,11 +67,19 @@ final class ModuleStore {
     }
 
     func resumePersistedModules() async {
-        guard enabledModuleIDs.contains("desktop.warm-corners"),
-              let module = manifest.modules.first(where: { $0.id == "desktop.warm-corners" }) else {
-            return
+        for module in manifest.modules where enabledModuleIDs.contains(module.id) {
+            switch module.id {
+            case "desktop.warm-corners":
+                await enableWarmCorners(module)
+            case "desktop.audio-guard":
+                audioGuard.start()
+            case "desktop.brightness":
+                brightness.start()
+            default:
+                break
+            }
         }
-        await enableWarmCorners(module)
+        synchronizeAgentRegistration()
     }
 
     var groups: [String] {
@@ -110,18 +131,9 @@ final class ModuleStore {
         }
 
         if enabled {
-            if module.id == "desktop.warm-corners" {
-                Task { await enableWarmCorners(module) }
-                return
-            }
-            enabledModuleIDs.insert(module.id)
+            Task { await enableModule(module) }
         } else {
-            enabledModuleIDs.remove(module.id)
-        }
-        persistEnabledModules()
-
-        if module.id == "desktop.warm-corners" {
-            enabled ? warmCornerRuntime.start() : warmCornerRuntime.stop()
+            disableModule(module)
         }
     }
 
@@ -130,14 +142,33 @@ final class ModuleStore {
             return .unavailable(module.availability.label)
         }
         if isEnabled(module) {
-            if module.id == "desktop.warm-corners" {
+            switch module.id {
+            case "desktop.warm-corners":
                 return warmCornerRuntime.isRunning
                     ? .ready(warmCorners.hasAnyCornerSet ? "Running" : "Running · no corners assigned")
                     : .unavailable("Enabled · watcher stopped")
+            case "desktop.audio-guard":
+                return audioGuard.isRunning ? .ready("Watching audio output") : .unavailable("Enabled · watcher stopped")
+            case "desktop.brightness":
+                return brightness.isRunning ? .ready("Ready") : .unavailable("Enabled · controller stopped")
+            default:
+                return .ready("Enabled")
             }
-            return .ready("Enabled")
         }
         return .disabled("Off")
+    }
+
+    func checkForUpdates() {
+        Task { await updates.check() }
+    }
+
+    func installAvailableUpdate() {
+        Task {
+            if await updates.installAvailableUpdate() {
+                try? await Task.sleep(for: .milliseconds(250))
+                NSApp.terminate(nil)
+            }
+        }
     }
 
     var launchAtLogin: Bool {
@@ -157,6 +188,29 @@ final class ModuleStore {
 
     private func persistEnabledModules() {
         UserDefaults.standard.set(enabledModuleIDs.sorted(), forKey: Self.enabledKey)
+        do {
+            try ModuleSelectionFile.save(enabledModuleIDs, to: applicationSupportURL)
+        } catch {
+            lastError = "Module selection could not be saved for the background agent: \(error.localizedDescription)"
+        }
+    }
+
+    private func synchronizeAgentRegistration() {
+        do {
+            try agentRegistration.synchronize(
+                shouldRun: !enabledModuleIDs.isDisjoint(with: scheduledModuleIDs)
+            )
+        } catch {
+            lastError = "The Switchboard background agent could not be updated: \(error.localizedDescription)"
+        }
+    }
+
+    private static func loadScheduledModuleIDs() -> Set<String> {
+        guard let url = Bundle.main.url(forResource: "RuntimeManifest", withExtension: "json"),
+              let runtime = try? JSONDecoder().decode(RuntimeManifest.self, from: Data(contentsOf: url)) else {
+            return []
+        }
+        return Set(runtime.jobs.map(\.moduleID))
     }
 
     private func enableWarmCorners(_ module: ModuleDefinition) async {
@@ -172,11 +226,127 @@ final class ModuleStore {
             lastError = error.localizedDescription
         }
     }
+
+    private func enableModule(_ module: ModuleDefinition) async {
+        if module.id == "desktop.warm-corners" {
+            await enableWarmCorners(module)
+            return
+        }
+
+        let commandNames = commands(for: module)
+        let serviceNames = services(for: module).map(\.name)
+        let ownsScheduledJobs = scheduledModuleIDs.contains(module.id)
+        let requiresCanonicalInstall = !commandNames.isEmpty || !serviceNames.isEmpty ||
+            !module.legacyLabels.isEmpty || ownsScheduledJobs
+        guard !requiresCanonicalInstall || CanonicalInstallGate.isCanonical() else {
+            lastError = "Install Switchboard in Applications before enabling \(module.name)."
+            return
+        }
+
+        var commandsActivated = false
+        var servicesActivated = false
+        do {
+            if !commandNames.isEmpty {
+                try commandActivation.enable(
+                    bundleURL: Bundle.main.bundleURL,
+                    moduleID: module.id,
+                    commandNames: commandNames
+                )
+                commandsActivated = true
+            }
+            if !serviceNames.isEmpty {
+                try serviceActivation.enable(
+                    bundleURL: Bundle.main.bundleURL,
+                    serviceNames: serviceNames
+                )
+                servicesActivated = true
+            }
+            if ownsScheduledJobs {
+                // Registration may start the shared agent, but this module is
+                // deliberately absent from ModuleSelectionFile until after its
+                // legacy scheduler has been quiesced below. The agent therefore
+                // cannot run old and replacement jobs at the same time.
+                try agentRegistration.synchronize(shouldRun: true)
+            }
+            if !module.legacyLabels.isEmpty {
+                _ = try LegacySchedulerMigration(
+                    moduleID: module.id,
+                    legacyLabels: module.legacyLabels
+                ).migrate()
+            }
+
+            enabledModuleIDs.insert(module.id)
+            persistEnabledModules()
+            startLocalRuntime(for: module)
+            synchronizeAgentRegistration()
+        } catch {
+            if servicesActivated {
+                try? serviceActivation.disable(
+                    bundleURL: Bundle.main.bundleURL,
+                    serviceNames: serviceNames
+                )
+            }
+            if commandsActivated {
+                try? commandActivation.disable(
+                    bundleURL: Bundle.main.bundleURL,
+                    moduleID: module.id,
+                    commandNames: commandNames
+                )
+            }
+            enabledModuleIDs.remove(module.id)
+            persistEnabledModules()
+            stopLocalRuntime(for: module)
+            lastError = "\(module.name) was not enabled: \(error.localizedDescription)"
+        }
+    }
+
+    private func disableModule(_ module: ModuleDefinition) {
+        let commandNames = commands(for: module)
+        let serviceNames = services(for: module).map(\.name)
+        do {
+            if !serviceNames.isEmpty, CanonicalInstallGate.isCanonical() {
+                try serviceActivation.disable(
+                    bundleURL: Bundle.main.bundleURL,
+                    serviceNames: serviceNames
+                )
+            }
+            if !commandNames.isEmpty, CanonicalInstallGate.isCanonical() {
+                try commandActivation.disable(
+                    bundleURL: Bundle.main.bundleURL,
+                    moduleID: module.id,
+                    commandNames: commandNames
+                )
+            }
+            enabledModuleIDs.remove(module.id)
+            persistEnabledModules()
+            stopLocalRuntime(for: module)
+            synchronizeAgentRegistration()
+        } catch {
+            lastError = "\(module.name) could not be disabled safely: \(error.localizedDescription)"
+        }
+    }
+
+    private func startLocalRuntime(for module: ModuleDefinition) {
+        switch module.id {
+        case "desktop.audio-guard": audioGuard.start()
+        case "desktop.brightness": brightness.start()
+        default: break
+        }
+    }
+
+    private func stopLocalRuntime(for module: ModuleDefinition) {
+        switch module.id {
+        case "desktop.warm-corners": warmCornerRuntime.stop()
+        case "desktop.audio-guard": audioGuard.stop()
+        case "desktop.brightness": brightness.stop()
+        default: break
+        }
+    }
 }
 
 enum ModuleSelectionPolicy {
     static func canEnable(_ module: ModuleDefinition) -> Bool {
-        module.availability == .pilot
+        module.availability == .pilot || module.availability == .ready
     }
 
     static func sanitizedEnabledIDs(

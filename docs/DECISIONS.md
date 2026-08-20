@@ -1,35 +1,25 @@
 # Switchboard decisions
 
-These boundaries are deliberate product decisions, not a promise that every listed item is already implemented.
+These boundaries describe the current product, not a promise that every catalog entry is enabled.
 
-## Product boundary
+## Product and module boundary
 
-Switchboard is the mega app for small general-purpose utilities. The first release supports macOS 26 on Apple silicon, and Warm Corners is the only current pilot. Every other manifest entry remains planned, repair-required, or classification-required until its own implementation and verification pass.
+Switchboard is one menu-bar app for general-purpose Mac utilities with one background agent. Ready modules are Warm Corners, Audio Disconnect Guard, Quit on Close, Mac Brightness, Mail Assistant, AutoInstall DMG, Copy Safari URL, Local Read Connectors, Memory System, Codex & System Improvement, Repository & Release Automation, NotebookLM Sync, Backup Coverage Audit, and Advanced Commands. Kinetics, Smart Wake, and Copy Path are planned and remain unavailable.
 
-## Separate products and workers
+## Bundled operations
 
-Market, School, Tool Dashboard, Vitals, UsageQueue, ReleaseRadar, NutrientTracker, Psephos, Tax Simulator, and Runway stay independent apps and DMGs. A product-specific background worker belongs in that product's DMG, not in Switchboard. This keeps ownership, updates, permissions, and rollback paths understandable.
+Sanitized command payloads and macOS Services ship inside the Switchboard bundle. Command, service, and scheduler migration is recoverable: it records intent, verifies each replacement, and can roll back. The current migration path does not delete legacy items.
 
-## Separate Safari apps
+## Separate products and integrations
 
-ForceCopyPaste, NewTabLinks, and YouTube Defaults stay separate Safari apps. Safari extension packaging and permissions are their own product boundary and are not folded into the mega app.
+Market, School, Tool Dashboard, Vitals, UsageQueue, ReleaseRadar, NutrientTracker, Psephos, Tax Simulator, and Runway remain standalone products; their workers remain in their own app bundles and DMGs. ForceCopyPaste, NewTabLinks, and YouTube Defaults remain separate Safari apps. Third-party utilities and general Apple Shortcuts stay outside Switchboard.
 
-## Third-party and fork boundary
+## Updates and distribution
 
-Third-party utilities stay outside Switchboard. Maintained forks stay in separate repositories and keep their upstream history and ownership boundaries. Switchboard may expose an approved local operation only when the manifest explicitly assigns it to Switchboard; it does not absorb third-party applications.
+The implemented updater discovers real published GitHub releases, downloads the update manifest and DMG, verifies the SHA-256 hash, runs a nested updater, and supports rollback from a verified recovery copy.
 
-## Shortcuts boundary
-
-General Apple Shortcuts stay outside Switchboard. The Mac day/night brightness shortcuts are the one replacement: the planned Mac Brightness module provides native brightness control instead. Other unrelated shortcuts are excluded rather than silently reproduced.
-
-## Permissions, identity, and migration
-
-Replacement work preserves existing permission identities where possible and verifies each replacement in production before retiring a superseded component. Warm Corners is governed by its migration contract: stop both pointer watchers before import or rollback, preserve the exact legacy settings value in the transaction recovery record, and require the health checks and stabilization cycle. Retirement is a future production-only action with no removal operation in the current pilot; once enabled, it may move the legacy app to Trash only after stabilization. The signed restore source is retained independently.
-
-## Distribution and signing
-
-The local build requires the stable `Ivo Market Dev` signing identity. That certificate is self-signed, has no Apple Team ID, preserves the established local identity, and produces apps Gatekeeper rejects. The keychain currently has no Apple-issued `Developer ID Application` identity. A public DMG requires Apple Developer ID signing, hardened runtime, a secure timestamp, and notarization; public release is blocked until those requirements are met. Switchboard is currently not installed, and no public DMG exists. No ad-hoc signing or unreviewed installation is part of this project.
+The release script requires Apple Developer ID signing, hardened runtime, notarization, stapling, and verification before publishing an immutable GitHub release. It is currently blocked because the required Developer ID certificate is absent. The local build is not installed, and no public DMG or public release exists.
 
 ## Source and license
 
-Ivo selected public source and the MIT License. Source publication does not change the separate product, worker, Safari-app, permission, or migration boundaries above, and it does not imply that a distributable signed DMG is available.
+Source is public under the MIT License. Public source does not change the separate product, worker, Safari-app, permission, or migration boundaries above.

@@ -49,6 +49,7 @@ struct ModuleDefinition: Decodable, Identifiable, Hashable {
 
     enum Availability: String, Decodable {
         case pilot
+        case ready
         case planned
         case repairRequired = "repair-required"
         case classificationRequired = "classification-required"
@@ -56,6 +57,7 @@ struct ModuleDefinition: Decodable, Identifiable, Hashable {
         var label: String {
             switch self {
             case .pilot: "Pilot ready"
+            case .ready: "Ready"
             case .planned: "Planned"
             case .repairRequired: "Repair required"
             case .classificationRequired: "Inventory review"

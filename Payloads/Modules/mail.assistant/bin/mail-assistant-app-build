@@ -1,0 +1,110 @@
+#!/bin/zsh
+# Builds /Applications/MailAssistant.app: a signed, headless wrapper whose only job
+# is to give the hourly mail runner a STABLE identity.
+#
+# macOS attaches a privacy grant to a program's code signature, not to its path. A
+# bare script launched by launchd has no signature, so it can never hold a grant --
+# that is why reading Mail's database started failing with "authorization denied"
+# while nothing about the script had changed. Signing with a real certificate (not
+# ad-hoc, which is keyed to the exact compiled bytes) means rebuilding this bundle
+# does not invalidate the permission, so the grant is given once and stays given.
+#
+# Idempotent: run it again after any change and re-sign in place.
+set -euo pipefail
+
+APP="/Applications/MailAssistant.app"
+BUNDLE_ID="${MAIL_ASSISTANT_BUNDLE_ID:-com.example.mail-assistant}"
+SIGNING_IDENTITY="${MAIL_ASSISTANT_SIGNING_IDENTITY:-}"
+TARGET="$HOME/.local/bin/apple-mail-draft-runner"
+
+# --version must be READ-ONLY. Tool Status Dashboard runs the health check of every
+# registered binary on each 5-minute scan under a 5s timeout; when this script had no
+# --version branch it fell straight through to the rebuild below, so the scan deleted
+# and re-created the bundle every 5 minutes and the timeout killed it mid-build. The
+# app spent the night as an unsigned shell with no runner.sh. A build script that is
+# registered for monitoring must answer its health check without touching anything.
+if [[ "${1:-}" == "--version" || "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  print "mail-assistant-app-build (signed wrapper for the hourly mail job)"
+  if [[ ! -x "$APP/Contents/MacOS/mail-assistant-runner" ]]; then
+    print "  FAIL: $APP is missing or has no executable"; exit 1
+  fi
+  if [[ ! -x "$APP/Contents/Resources/runner.sh" ]]; then
+    print "  FAIL: $APP has no Resources/runner.sh; the bundle would exit 1 on every run"; exit 1
+  fi
+  # codesign prints the requirement with or without a leading "# " depending on how the
+  # bundle is signed, and a no-match grep would abort this script under `set -e`.
+  dr="$(codesign -d -r- "$APP" 2>&1 | grep -m1 'designated' || true)"
+  if [[ "$dr" != *"certificate leaf"* ]]; then
+    print "  FAIL: not certificate-signed, so privacy grants die on the next rebuild -- $dr"; exit 1
+  fi
+  print "  ok: bundle intact, $dr"
+  exit 0
+fi
+
+[[ -x "$TARGET" ]] || { print -u2 "missing runner: $TARGET"; exit 1; }
+[[ -n "$SIGNING_IDENTITY" ]] || { print -u2 "set MAIL_ASSISTANT_SIGNING_IDENTITY to a keychain signing identity"; exit 1; }
+security find-identity -v -p codesigning | grep -q "$SIGNING_IDENTITY" \
+  || { print -u2 "signing identity not in keychain: $SIGNING_IDENTITY"; exit 1; }
+
+rm -rf "$APP"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+
+cat > "$APP/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key><string>mail-assistant-runner</string>
+    <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
+    <key>CFBundleName</key><string>Mail Assistant</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>1.0</string>
+    <key>LSUIElement</key><true/>
+</dict>
+</plist>
+PLIST
+
+# The bundle's executable must be a real Mach-O binary: launchd running a shell
+# script directly would put the identity back on the interpreter, which is the
+# problem this bundle exists to solve. This stub only re-execs runner.sh, so the
+# grant lands on the bundle and the child inherits it.
+STUB="$(mktemp -t mailassistant).c"
+cat > "$STUB" <<'CSRC'
+#include <limits.h>
+#include <libgen.h>
+#include <stdio.h>
+#include <unistd.h>
+#include <mach-o/dyld.h>
+
+int main(int argc, char *argv[]) {
+    char exec_path[PATH_MAX];
+    uint32_t size = sizeof(exec_path);
+    if (_NSGetExecutablePath(exec_path, &size) != 0) return 1;
+    char script[PATH_MAX];
+    /* Resources/, not MacOS/: a script beside the executable counts as unsigned
+       nested code and breaks strict signature verification. */
+    snprintf(script, sizeof(script), "%s/../Resources/runner.sh", dirname(exec_path));
+    char *child[argc + 1];
+    child[0] = script;
+    for (int i = 1; i < argc; i++) child[i] = argv[i];
+    child[argc] = NULL;
+    execv(script, child);
+    perror("execv");
+    return 1;
+}
+CSRC
+clang -O2 -o "$APP/Contents/MacOS/mail-assistant-runner" "$STUB"
+rm -f "$STUB"
+
+cat > "$APP/Contents/Resources/runner.sh" <<RUNNER
+#!/bin/zsh
+# Runs the mail assistant with the bundle's privacy identity.
+exec "$TARGET" "\$@"
+RUNNER
+chmod +x "$APP/Contents/Resources/runner.sh"
+
+codesign --force --sign "$SIGNING_IDENTITY" --identifier "$BUNDLE_ID" --timestamp=none "$APP"
+codesign --verify --deep --strict "$APP"
+
+print "built and signed $APP"
+codesign -dv "$APP" 2>&1 | grep -E "Identifier|Authority" | head -3

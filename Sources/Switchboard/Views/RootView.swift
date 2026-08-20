@@ -103,11 +103,41 @@ private struct OverviewView: View {
                     MetricCard(value: "\(store.manifest.separateSafariApps.count)", label: "Separate Safari apps", color: SwitchboardTheme.warning)
                 }
 
+                UpdateCard(store: store)
+
                 OwnershipBoundaryView(store: store)
             }
             .padding(24)
         }
         .background(SwitchboardTheme.background)
+    }
+}
+
+private struct UpdateCard: View {
+    @Bindable var store: ModuleStore
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: "arrow.triangle.2.circlepath.circle.fill")
+                .font(.system(size: 24))
+                .foregroundStyle(SwitchboardTheme.accent)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Updates").font(.system(size: 14, weight: .semibold))
+                Text(store.updates.status.message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            if store.updates.availableUpdate != nil {
+                Button("Install Update") { store.installAvailableUpdate() }
+                    .buttonStyle(.borderedProminent)
+            } else {
+                Button("Check Now") { store.checkForUpdates() }
+                    .disabled(store.updates.status == .checking)
+            }
+        }
+        .padding(18)
+        .switchboardPanel()
     }
 }
 

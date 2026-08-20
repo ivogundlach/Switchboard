@@ -1,0 +1,3 @@
+#!/bin/bash
+set -euo pipefail
+exec /Applications/Switchboard.app/Contents/Resources/Modules/connectors.local-read/bin/read_connectors.py "$@"

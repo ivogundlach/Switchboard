@@ -1,0 +1,15 @@
+#!/bin/bash
+set -euo pipefail
+
+case "${1:---version}" in
+  --version|-V)
+    exec "${WEEKLY_SYSTEM_IMPROVEMENT_BIN:-${HOME:-$(cd && pwd -P)}/.local/bin/weekly-system-improvement}" --health
+    ;;
+  --help|-h)
+    printf '%s\n' 'weekly-system-improvement-health --version'
+    ;;
+  *)
+    printf 'unsupported argument: %s\n' "$1" >&2
+    exit 2
+    ;;
+esac

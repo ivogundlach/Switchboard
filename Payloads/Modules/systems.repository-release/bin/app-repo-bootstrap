@@ -1,0 +1,227 @@
+#!/usr/bin/env bash
+# app-repo-bootstrap — one-time: give each configured app its own private GitHub repo
+# with history replayed from the configured snapshot archive.
+#
+# Usage:
+#   app-repo-bootstrap [--dry-run] [--app NAME] [--no-push] [--version]
+#
+# Idempotent: an app whose working tree already has .git is skipped, so a
+# partial run can simply be re-run.
+#
+# History is replayed WITHOUT model inference — one dated commit per archived
+# snapshot that touched the app. Descriptive, model-written messages start with
+# the nightly app-repo-sync from here on, so there is no inference backlog.
+set -uo pipefail
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+
+NAME="app-repo-bootstrap"
+VERSION="1.0.0"
+
+# Keep the health/version path independent of shared runtime configuration.
+# The dashboard calls this before any real bootstrap work, so it must answer
+# even if the shared library is unavailable or malformed.
+case "${1:-}" in
+  --version|-V) printf '%s %s\n' "$NAME" "$VERSION"; exit 0 ;;
+esac
+
+# shellcheck source=/dev/null
+. "$HOME/.local/bin/app-repo-lib.sh"
+
+mkdir -p "$STATE"
+LOG="$STATE/bootstrap.log"
+
+DRY_RUN=0
+NO_PUSH=0
+ONLY_APP=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --version|-V) echo "$NAME $VERSION"; exit 0 ;;
+    --dry-run) DRY_RUN=1 ;;
+    --no-push) NO_PUSH=1 ;;
+    --app) ONLY_APP="${2:-}"; shift ;;
+    -h|--help) sed -n '2,14p' "$0"; exit 0 ;;
+    *) echo "unknown argument: $1" >&2; exit 2 ;;
+  esac
+  shift
+done
+
+command -v gh >/dev/null 2>&1 || { echo "gh CLI required" >&2; exit 1; }
+gh auth status >/dev/null 2>&1 || { echo "gh not authenticated" >&2; exit 1; }
+
+ARCHIVE=""
+cleanup() { [ -n "$ARCHIVE" ] && rm -rf "$ARCHIVE"; }
+trap cleanup EXIT
+
+echo "Cloning snapshot archive for history replay…"
+ARCHIVE="$(mktemp -d "${TMPDIR:-/tmp}/app-repo-archive.XXXXXX")"
+if ! git clone --quiet "$ARCHIVE_REMOTE" "$ARCHIVE/repo" >>"$LOG" 2>&1; then
+  echo "FAILED: could not clone $ARCHIVE_REMOTE (see $LOG)" >&2
+  exit 1
+fi
+ARCHIVE_REPO="$ARCHIVE/repo"
+
+# A shallow checkout cannot seed a fresh remote: the pack it sends references
+# parent commits it does not hold, and the push dies with "remote unpack failed:
+# index-pack failed". Every forked project here arrived as a --depth 1 clone, so
+# fill the history in before the first push rather than after the failure.
+unshallow_if_needed() {
+  local app="$1" dir="$2" src
+  [ -f "$dir/.git/shallow" ] || return 0
+  src="$(git -C "$dir" remote | grep -x upstream || git -C "$dir" remote | head -1)"
+  if [ -z "$src" ]; then
+    echo "  FAILED $app — shallow checkout with no remote to deepen from" >&2
+    return 1
+  fi
+  echo "    shallow checkout — fetching full history from $src"
+  if ! git -C "$dir" fetch --unshallow "$src" >>"$LOG" 2>&1; then
+    echo "  FAILED $app — could not deepen shallow history (see $LOG)" >&2
+    return 1
+  fi
+  return 0
+}
+
+# Create the private GitHub repo if absent, wire up origin, and push.
+publish_app() {
+  local app="$1" dir="$2" branch
+  branch="$(git -C "$dir" symbolic-ref --short HEAD 2>/dev/null || echo main)"
+
+  unshallow_if_needed "$app" "$dir" || return 1
+
+  if gh repo view "$GH_OWNER/$app" >/dev/null 2>&1; then
+    git -C "$dir" remote get-url origin >/dev/null 2>&1 || \
+      git -C "$dir" remote add origin "https://github.com/$GH_OWNER/$app.git"
+  else
+    if ! gh repo create "$GH_OWNER/$app" --private --source="$dir" --remote=origin >>"$LOG" 2>&1; then
+      echo "  FAILED $app — gh repo create failed (see $LOG)" >&2
+      return 1
+    fi
+  fi
+  if ! git -C "$dir" push --quiet -u origin "$branch" >>"$LOG" 2>&1; then
+    echo "  FAILED $app — push failed (see $LOG)" >&2
+    return 1
+  fi
+  echo "    pushed → https://github.com/$GH_OWNER/$app"
+  return 0
+}
+
+bootstrap_app() {
+  local app="$1"
+  local dir="$PROJECTS/$app"
+  local staged commits sha when subject count=0 remote_heads rc
+
+  if [ ! -d "$dir" ]; then
+    echo "  skip $app — no working tree at $dir"
+    return 0
+  fi
+  # An app that already has git keeps its own history — replaying snapshots over
+  # it would be destructive. It still needs a remote, so fall through to the
+  # publish step only.
+  if [ -e "$dir/.git" ]; then
+    if git -C "$dir" remote get-url origin >/dev/null 2>&1; then
+      # Having an origin is not the same as being backed up. gh repo create
+      # wires origin up BEFORE it pushes, so a first push that fails leaves a
+      # configured remote pointing at an empty repo — and this skip then turned
+      # every retry into a silent no-op. Only skip once the remote holds a ref.
+      # A network or auth error (rc != 0) is unknowable, so keep skipping there
+      # rather than hammering an unreachable remote for every app.
+      remote_heads="$(git -C "$dir" ls-remote --heads origin 2>/dev/null)"; rc=$?
+      if [ "$rc" -ne 0 ] || [ -n "$remote_heads" ]; then
+        echo "  skip $app — already a git repository with a remote"
+        return 0
+      fi
+      echo "  $app — origin configured but empty, retrying the initial push"
+    fi
+    if [ "$DRY_RUN" -eq 1 ]; then
+      echo "  dry-run $app — existing git history, would publish $(git -C "$dir" log --oneline 2>/dev/null | wc -l | tr -d ' ') commit(s)"
+      return 0
+    fi
+    echo "  $app — existing git history preserved, publishing"
+    publish_app "$app" "$dir"
+    return $?
+  fi
+
+  # Replay history in a scratch tree, then adopt its .git. Building history in
+  # place would mean rsyncing old snapshots over the live working tree, which
+  # would destroy any uncommitted current work.
+  staged="$(mktemp -d "${TMPDIR:-/tmp}/app-repo-$app.XXXXXX")"
+  git -C "$staged" init --quiet --initial-branch=main 2>/dev/null || {
+    git -C "$staged" init --quiet
+    git -C "$staged" symbolic-ref HEAD refs/heads/main
+  }
+  git -C "$staged" config user.name "${APP_REPO_AUTHOR_NAME:-Your Name}"
+  git -C "$staged" config user.email "${APP_REPO_AUTHOR_EMAIL:-you@example.com}"
+
+  # Oldest first, so replayed history reads forward.
+  commits="$(git -C "$ARCHIVE_REPO" log --reverse --format='%H %aI' -- "apps/$app" 2>/dev/null)"
+
+  while read -r sha when; do
+    [ -n "$sha" ] || continue
+    # Clear the tree but keep .git, then lay down that snapshot's contents.
+    find "$staged" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+    if ! git -C "$ARCHIVE_REPO" archive "$sha:apps/$app" 2>/dev/null | tar -x -C "$staged" 2>/dev/null; then
+      continue
+    fi
+    write_gitignore "$staged" "$app"
+    git -C "$staged" add -A >/dev/null 2>&1
+    git -C "$staged" diff --cached --quiet && continue
+    subject="Snapshot ${when%%T*}"
+    GIT_AUTHOR_DATE="$when" GIT_COMMITTER_DATE="$when" \
+      git -C "$staged" commit --quiet \
+        -m "$subject" \
+        -m "Imported from the configured daily snapshot archive during per-app repository bootstrap. Pre-bootstrap history is snapshot-granular; commits after this point are per-change." \
+        >/dev/null 2>&1 && count=$((count + 1))
+  done <<<"$commits"
+
+  if [ "$count" -eq 0 ]; then
+    # No archive history for this app — start from an empty root commit so the
+    # working-tree import below still reads as a real first commit.
+    GIT_AUTHOR_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      git -C "$staged" commit --quiet --allow-empty -m "Initialize repository" >/dev/null 2>&1
+  fi
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "  dry-run $app — would import $count snapshot commit(s)"
+    rm -rf "$staged"
+    return 0
+  fi
+
+  # Adopt the replayed history into the live working tree.
+  mv "$staged/.git" "$dir/.git" || { echo "  FAILED $app — could not adopt .git" >&2; rm -rf "$staged"; return 1; }
+  rm -rf "$staged"
+  write_gitignore "$dir" "$app"
+  git -C "$dir" add -A >/dev/null 2>&1
+
+  if ! check_sensitive_paths "$dir"; then
+    echo "  FAILED $app — sensitive path staged; left uncommitted for review" >&2
+    return 1
+  fi
+  if ! gitleaks_clean "$dir"; then
+    echo "  FAILED $app — gitleaks rejected the working tree; left uncommitted" >&2
+    return 1
+  fi
+
+  if ! git -C "$dir" diff --cached --quiet; then
+    git -C "$dir" commit --quiet \
+      -m "Import current working tree" \
+      -m "State on disk at bootstrap, including any work newer than the last archived snapshot." >/dev/null 2>&1
+  fi
+
+  echo "  $app — $count snapshot commit(s) + working tree"
+
+  [ "$NO_PUSH" -eq 1 ] && return 0
+  publish_app "$app" "$dir"
+  return $?
+}
+
+failed=0
+echo "Bootstrapping per-app repositories…"
+for app in "${APPS[@]}"; do
+  [ -n "$ONLY_APP" ] && [ "$app" != "$ONLY_APP" ] && continue
+  bootstrap_app "$app" || failed=$((failed + 1))
+done
+
+if [ "$failed" -gt 0 ]; then
+  echo "Completed with $failed failure(s). See $LOG"
+  exit 1
+fi
+echo "Done."

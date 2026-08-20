@@ -34,7 +34,7 @@
       "group": "Desktop Controls",
       "purpose": "Mute newly selected non-Bluetooth outputs to prevent accidental playback.",
       "owner": "switchboard",
-      "availability": "planned",
+      "availability": "ready",
       "components": ["signed audio watcher", "LaunchAgent"],
       "permissionCategories": [],
       "legacyLabels": ["com.ivogundlach.AudioDisconnectGuard"],
@@ -47,7 +47,7 @@
       "group": "Desktop Controls",
       "purpose": "Quit selected apps after their last window closes.",
       "owner": "switchboard",
-      "availability": "planned",
+      "availability": "ready",
       "components": ["signed window watcher", "LaunchAgent", "legacy login registrations"],
       "permissionCategories": ["Accessibility if required by the selected app"],
       "legacyLabels": ["com.ivogundlach.quit-on-close", "com.ivogundlach.autoquit", "onebadidea.Swift-Quit-LaunchAtLoginHelper"],
@@ -73,7 +73,7 @@
       "group": "Desktop Controls",
       "purpose": "Apply native day and night brightness levels without Apple Shortcuts.",
       "owner": "switchboard",
-      "availability": "planned",
+      "availability": "ready",
       "components": ["native display brightness controller"],
       "permissionCategories": [],
       "legacyLabels": [],
@@ -86,7 +86,7 @@
       "group": "Mail",
       "purpose": "Prepare scheduled Apple Mail reply drafts while leaving Mail data on the Mac.",
       "owner": "switchboard",
-      "availability": "planned",
+      "availability": "ready",
       "components": ["MailAssistant runner", "scheduled draft LaunchAgent", "apple-mail command family"],
       "permissionCategories": ["Mail access", "Automation if required"],
       "legacyLabels": ["com.ivogundlach.apple-mail-draft-runner"],
@@ -112,7 +112,7 @@
       "group": "Files & Links",
       "purpose": "Install apps from dropped DMG files through a serialized queue.",
       "owner": "switchboard",
-      "availability": "planned",
+      "availability": "ready",
       "components": ["DMG drop handler", "installer worker"],
       "permissionCategories": ["Administrator approval when an install requires it"],
       "legacyLabels": [],
@@ -120,25 +120,12 @@
       "configKeys": ["conflict policy", "trash completed DMGs"]
     },
     {
-      "id": "links.claude-handler",
-      "name": "Claude Code URL Handler",
-      "group": "Files & Links",
-      "purpose": "Open registered Claude command links through a fixed signed handler.",
-      "owner": "switchboard",
-      "availability": "repair-required",
-      "components": ["URL-scheme handler"],
-      "permissionCategories": [],
-      "legacyLabels": [],
-      "legacyBundleIDs": ["com.anthropic.claude-code-url-handler"],
-      "configKeys": ["allowed link actions"]
-    },
-    {
       "id": "links.copy-safari-url",
       "name": "Copy Safari URL",
       "group": "Files & Links",
       "purpose": "Copy the current Safari page address from a macOS Service.",
       "owner": "switchboard",
-      "availability": "planned",
+      "availability": "ready",
       "components": ["CopySafariURL service", "copy-safari-url command"],
       "permissionCategories": ["Safari Automation"],
       "legacyLabels": [],
@@ -151,7 +138,7 @@
       "group": "Local Data",
       "purpose": "Provide read-only access to selected local Apple data sources for agents.",
       "owner": "switchboard",
-      "availability": "planned",
+      "availability": "ready",
       "components": ["codex-read", "read_connectors.py", "Google Workspace read-only login adapter"],
       "permissionCategories": ["Per-source read permission"],
       "legacyLabels": [],
@@ -164,7 +151,7 @@
       "group": "Agent Systems",
       "purpose": "Back up, index, search, validate, and distill the local agent memory corpus.",
       "owner": "switchboard",
-      "availability": "classification-required",
+      "availability": "ready",
       "components": ["corpus backup", "semantic index", "transcript distillation", "weekly health", "backup verification", "individually approved memory tools"],
       "permissionCategories": ["Selected folder access"],
       "legacyLabels": ["com.ivogundlach.memory-corpus-backup", "com.ivogundlach.memory-health-weekly", "com.ivogundlach.memory.semantic-index", "com.ivogundlach.transcript-distill", "com.ivogundlach.memory.graphify.semantic"],
@@ -177,7 +164,7 @@
       "group": "Agent Systems",
       "purpose": "Keep agent instructions synchronized and run reviewed system-improvement checks.",
       "owner": "switchboard",
-      "availability": "classification-required",
+      "availability": "ready",
       "components": ["Codex mirror sync", "weekly system improvement", "skill audits", "Claude window keeper"],
       "permissionCategories": ["Selected folder access"],
       "legacyLabels": ["com.ivogundlach.codex-mirror-sync", "com.ivogundlach.weekly-system-improvement", "com.ivogundlach.claude-window-keeper"],
@@ -190,7 +177,7 @@
       "group": "Agent Systems",
       "purpose": "Synchronize owned repositories and run fixed signing and release operations.",
       "owner": "switchboard",
-      "availability": "classification-required",
+      "availability": "ready",
       "components": ["app-repo sync", "personal-repo sync", "public toolkit publish", "Developer ID release", "release and signing audits"],
       "permissionCategories": ["Selected folder access", "GitHub connection for enabled release actions"],
       "legacyLabels": ["com.ivogundlach.app-repo-sync", "com.ivogundlach.personal-repo-sync", "com.ivogundlach.public-toolkit-publish"],
@@ -203,7 +190,7 @@
       "group": "Agent Systems",
       "purpose": "Keep selected NotebookLM notebooks authenticated and synchronized.",
       "owner": "switchboard",
-      "availability": "planned",
+      "availability": "ready",
       "components": ["hourly sync", "daily auth keepalive", "ingest command"],
       "permissionCategories": ["NotebookLM account connection"],
       "legacyLabels": ["com.ivo.notebooklm-sync", "com.ivo.notebooklm-auth-refresh"],
@@ -216,7 +203,7 @@
       "group": "Agent Systems",
       "purpose": "Check whether important custom tools and state are covered by backups.",
       "owner": "switchboard",
-      "availability": "planned",
+      "availability": "ready",
       "components": ["daily backup-coverage-audit cron replacement"],
       "permissionCategories": ["Selected folder access"],
       "legacyLabels": ["cron:backup-coverage-audit"],
@@ -229,8 +216,8 @@
       "group": "Agent Systems",
       "purpose": "Expose individually approved custom commands as fixed signed operations.",
       "owner": "switchboard",
-      "availability": "classification-required",
-      "components": ["Ivo-owned commands not assigned to another product"],
+      "availability": "ready",
+      "components": ["First-party commands not assigned to another product"],
       "permissionCategories": ["Varies by approved command"],
       "legacyLabels": [],
       "legacyBundleIDs": [],
@@ -296,6 +283,10 @@
       "items":["copy-safari-url"]
     },
     {
+      "owner":"switchboard:files.auto-install-dmg",
+      "items":["auto-install-dmg-worker"]
+    },
+    {
       "owner":"switchboard:desktop.smart-wake",
       "items":["smart-wake","smart-wake-diagnose","configure-display-lock.sh","discord-command-watch.py","install-sleep-guard.sh","lib.sh","sleep-guard-root.sh","smart-wake.sh","wifi-ssid.py"]
     },
@@ -304,8 +295,12 @@
       "items":["Ingest nblm.command","auth_keepalive.sh","ingest_nblm.sh","notebooklm_sync.py","sync_all.sh"]
     },
     {
+      "owner":"switchboard:connectors.local-read",
+      "items":["codex-read","gws-login-readonly.sh","read_connectors.py"]
+    },
+    {
       "owner":"switchboard:systems.advanced-commands",
-      "items":["agy","arxiv-pp-cli","cyber-skill-triage","digg-pp-cli","env","env.fish","last30days","mac-process-audit","process-cleanup-sudo-20260623.sh","studykit","swift-smoke","techmeme-pp-cli"]
+      "items":["cyber-skill-triage","env","env.fish","last30days","mac-process-audit","process-cleanup-sudo-20260623.sh","studykit","swift-smoke"]
     },
     {
       "owner":"standalone:Market",
@@ -367,6 +362,10 @@
     {"name":"Set Mac Night brightness","owner":"switchboard:desktop.brightness","disposition":"replace with native Switchboard behavior"}
   ],
   "excludedThirdPartyUtilities": [
+    {"name":"agy","owner":"excluded:third-party","disposition":"Google-signed utility remains separate"},
+    {"name":"arxiv-pp-cli","owner":"excluded:third-party","disposition":"third-party Printing Press utility remains separate"},
+    {"name":"digg-pp-cli","owner":"excluded:third-party","disposition":"third-party Printing Press utility remains separate"},
+    {"name":"techmeme-pp-cli","owner":"excluded:third-party","disposition":"third-party Printing Press utility remains separate"},
     {"name":"Amethyst","owner":"excluded:third-party","disposition":"maintained fork remains a separate repository"},
     {"name":"skhd","owner":"excluded:third-party","disposition":"vendor utility remains separate"},
     {"name":"OpenCodex proxy","owner":"excluded:third-party","disposition":"third-party service remains separate"},
@@ -374,6 +373,7 @@
     {"name":"Google Keystone tombstones","owner":"excluded:third-party","disposition":"empty vendor tombstones are not migrated"}
   ],
   "excludedSupersededOrDeleted": [
+    {"name":"Claude Code URL Handler","owner":"excluded:deprecated","disposition":"installed handler is broken and its Claude CLI target is absent"},
     {"name":"YouTubeHomeReload","owner":"excluded:superseded","disposition":"behavior already merged into YouTube Defaults"},
     {"name":"legacy Mail Assistant .bak scheduler","owner":"excluded:superseded","disposition":"inactive backup replaced by current scheduler"}
   ]

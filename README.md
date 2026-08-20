@@ -1,52 +1,50 @@
 # Switchboard
 
-Switchboard is a single menu-bar app for small, general-purpose Mac utilities. It presents the utilities as selectable modules, keeps each module's settings and permission boundary explicit, and records migration work so a replacement can be rolled back safely.
+Switchboard is one menu-bar app for small Mac utilities. It presents each utility as a module, keeps its settings and permissions explicit, and records migrations so a replaced command or service can be restored safely.
 
 ## Current status
 
-- The first release targets **macOS 26 on Apple silicon**.
-- **Warm Corners** is the only current pilot. It opens a chosen app when the pointer rests in a screen corner and can start at login.
-- The other modules are listed for planning, repair, or inventory review. They are not implemented as available Switchboard features merely because they appear in the manifest.
-- Switchboard is **not installed**. The build produces a local app under `build/Switchboard.app` and deliberately does not install it.
-- Public release is blocked pending Apple-issued **Developer ID Application** signing. The local `Ivo Market Dev` certificate is self-signed, has no Apple Team ID, preserves the established local identity, and produces apps that Gatekeeper rejects.
+- The target is **macOS 26 on Apple silicon**.
+- One Switchboard background agent runs the enabled schedules and module workers.
+- Ready modules are **Warm Corners**, **Audio Disconnect Guard**, **Quit on Close**, **Mac Brightness**, **Mail Assistant**, **AutoInstall DMG**, **Copy Safari URL**, **Local Read Connectors**, **Memory System**, **Codex & System Improvement**, **Repository & Release Automation**, **NotebookLM Sync**, **Backup Coverage Audit**, and **Advanced Commands**.
+- Planned modules are **Kinetics**, **Smart Wake**, and **Copy Path**. They are catalog entries only and are not available features.
+- The app bundles sanitized command payloads and macOS Services. Activating a command, service, or scheduler migrates it through a recoverable transaction with rollback support. The current workflow does not delete legacy items.
+- A local build is not installed. There is no current public DMG or public release.
 
-## Module selection
+## Module catalog and boundaries
 
-The app reads `Sources/Switchboard/Resources/ModuleManifest.json`. A module can be turned on only when its manifest availability is `pilot`; today that means Warm Corners only. Persisted module selection never starts Warm Corners directly: every enable or relaunch goes through the migration/status gate. If legacy settings exist, the new watcher starts only after verified evidence that the legacy watcher process is absent and its login registration is disabled. The current pilot has no production status/quiescence provider, so it remains stopped rather than risking duplicate watchers. Enabled-module choices are stored locally in UserDefaults. The Warm Corners settings are also local UserDefaults data; no cloud service is part of this pilot. Legacy Warm Corners settings do not auto-import: import waits for verified legacy-watcher quiescence, creates an exact recovery snapshot, records ledger transitions, verifies a settings round trip, and fails closed with rollback if any step fails.
+The catalog in `Sources/Switchboard/Resources/ModuleManifest.json` is the source of truth. `ready` modules can be enabled; `planned` modules are reserved for later implementation. Warm Corners opens a chosen app when the pointer rests in a screen corner and can start at login. Module changes use their migration and status gates rather than silently replacing existing workers.
 
-The planned module list is: Kinetics, Audio Disconnect Guard, Quit on Close, Smart Wake, Mac Brightness, Mail Assistant, Copy Path, AutoInstall DMG, Claude Code URL Handler, Copy Safari URL, Local Read Connectors, Memory System, Codex & System Improvement, Repository & Release Automation, NotebookLM Sync, Backup Coverage Audit, and Advanced Commands.
+Switchboard owns one background agent, its bundled payloads, and its Services. Standalone products and their workers remain in their own app bundles and DMGs. Safari apps remain separate. Third-party utilities and general Apple Shortcuts are excluded; Switchboard does not absorb them.
 
-## Products that stay separate
+| Category | Contents |
+|---|---|
+| Standalone products | Market, School, Tool Dashboard, Vitals, UsageQueue, ReleaseRadar, NutrientTracker, Psephos, Tax Simulator, Runway |
+| Separate Safari apps | ForceCopyPaste, NewTabLinks, YouTube Defaults |
+| Planned Switchboard modules | Kinetics, Smart Wake, Copy Path |
 
-These standalone products are not Switchboard modules: **Market**, **School**, **Tool Dashboard**, **Vitals**, **UsageQueue**, **ReleaseRadar**, **NutrientTracker**, **Psephos**, **Tax Simulator**, and **Runway**. Each product-specific background worker stays with its owning product and belongs in that product's own DMG.
+## Updates and release status
 
-These Safari apps also stay separate: **ForceCopyPaste**, **NewTabLinks**, and **YouTube Defaults**.
+The implemented update path discovers a real published GitHub release, downloads the signed update manifest and DMG, verifies the SHA-256 hash, runs the nested updater, and supports rollback from a verified recovery copy. This is an implemented local update mechanism, not a claim that a public release exists.
 
-Third-party utilities and maintained forks stay outside Switchboard. General Apple Shortcuts stay outside it too; only the Mac day/night brightness behavior is replaced by a native Switchboard module.
+The release script builds a Developer ID-signed, notarized, stapled DMG and publishes an immutable GitHub release only after verification. It is currently blocked because the required Apple Developer ID certificate is absent. No public DMG or release is available today.
 
 ## Privacy and configuration boundary
 
-Switchboard keeps module choices and pilot settings on this Mac. A future module must declare its configuration keys, components, and permission categories in the manifest before it is enabled. Local-read and account-connected modules must remain read-only for the sources they expose. Sensitive values, credentials, browser profiles, runtime data, and private memory are not documentation or release inputs.
+Settings and module choices stay on this Mac. Local-read and account-connected modules remain read-only for the sources they expose. Credentials, browser profiles, runtime data, and private memory are never documentation or release inputs.
 
 ## Build, test, and self-test
 
-From `$HOME/Projects/Switchboard`:
+From the repository root:
 
 ```bash
 swift test
 ./build.sh
-```
-
-The focused test suite currently has **35 tests**.
-
-`./build.sh` performs a release build, checks the app metadata, signs the local app, and verifies the signature. The executable's self-test checks the manifest, pilot set, ownership separation, and Warm Corners migration contract:
-
-```bash
 build/Switchboard.app/Contents/MacOS/Switchboard --self-test
 ```
 
-The local build requires the stable signing identity **Ivo Market Dev** and pins the existing certificate fingerprint rather than trusting its display name alone. The keychain currently has no Apple-issued `Developer ID Application` identity, so this local signature is not suitable for public distribution. A public DMG requires Apple Developer ID signing, hardened runtime, a secure timestamp, and notarization. `INSTALL=1 ./build.sh` is intentionally blocked until the Warm Corners production migration gate is approved.
+The test suite currently has **96 tests in 16 suites**. `./build.sh` creates a local app but does not install it; it stops when the pinned local signing identity is unavailable. The self-test validates the manifest, ownership boundaries, bundled commands and Services, runtime jobs, and migration inventories. The updater has its own focused test suite.
 
 ## License
 
-Switchboard source is public under the [MIT License](LICENSE). A public DMG does not exist yet; release remains blocked pending Developer ID signing and notarization.
+Switchboard source is public under the [MIT License](LICENSE). A public DMG and public release do not exist yet.

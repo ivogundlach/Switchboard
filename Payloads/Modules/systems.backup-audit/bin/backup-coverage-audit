@@ -1,0 +1,159 @@
+#!/bin/bash
+# Read-only proof that the autonomous source backup can see the current disk.
+# The source sync owns discovery; this command exercises that real path and also
+# walks the configured projects root so a new project cannot be omitted by a maintained list.
+set -uo pipefail
+
+NAME="backup-coverage-audit"
+VERSION="2.1.0"
+HOME_DIR="${HOME:-$(cd && pwd -P)}"
+EXPECTED_OWNER="${BACKUP_EXPECTED_OWNER:-example-owner}"
+PROJECTS="${BACKUP_PROJECTS:-${HOME_DIR}/Projects}"
+SYNC="${BACKUP_SYNC:-${HOME_DIR}/.local/bin/personal-repo-sync}"
+SYNC_STATUS="${BACKUP_SYNC_STATUS:-${HOME_DIR}/.local/state/personal-repo-sync/status.tsv}"
+STATE="${BACKUP_STATE:-${HOME_DIR}/.local/state/backup-coverage-audit}"
+CONTROL_DIR="${BACKUP_CONTROL_DIR:-${HOME_DIR}/Projects/source-archive}"
+CONTROL_NAME="$(basename "$CONTROL_DIR")"
+STATUS="$STATE/status.tsv"
+LOCK="$STATE/lock"
+MAX_VERIFIED_AGE=$((48 * 60 * 60))
+TEST_PROJECTS=""
+
+usage() {
+  echo "Usage: $NAME [--status|--version|--help]"
+  echo "       $NAME --test-projects PATH"
+  echo "       $NAME --test-status PATH"
+  echo "Normal runs are read-only and verify the configured source sync plus every folder in the projects root."
+}
+
+status_value() {
+  local file="$1" key="$2"
+  [ -f "$file" ] || return 0
+  awk -F '\t' -v key="$key" '$1 == key {value=$2} END {print value}' "$file"
+}
+
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then usage; exit 0; fi
+if [ "${1:-}" = "--status" ]; then
+  [ -f "$STATUS" ] && cat "$STATUS" || echo "no audit recorded"
+  exit 0
+fi
+check_health_status() {
+  local file="$1" result success now
+  result="$(status_value "$file" last_result)"
+  success="$(status_value "$file" last_success_at)"
+  now="$(date +%s)"
+  if [ "$result" != "ok" ] || ! [[ "$success" =~ ^[0-9]+$ ]] || [ $((now - success)) -gt $MAX_VERIFIED_AGE ]; then
+    echo "$NAME: the last complete coverage proof is missing, failed, or older than 48 hours" >&2
+    return 1
+  fi
+  return 0
+}
+
+if [ "${1:-}" = "--version" ] || [ "${1:-}" = "-V" ]; then
+  echo "$NAME $VERSION"
+  exit 0
+fi
+if [ "${1:-}" = "--test-status" ]; then
+  [ $# -eq 2 ] || { usage >&2; exit 2; }
+  check_health_status "$2"
+  exit $?
+fi
+if [ "${1:-}" = "--test-projects" ]; then
+  [ $# -eq 2 ] || { usage >&2; exit 2; }
+  TEST_PROJECTS="$2"
+  PROJECTS="$2"
+elif [ $# -ne 0 ]; then
+  usage >&2
+  exit 2
+fi
+
+mkdir -p "$STATE"
+chmod 700 "$STATE"
+if ! mkdir "$LOCK" 2>/dev/null; then
+  echo "$NAME: another audit is already running"
+  exit 0
+fi
+trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT INT TERM
+
+gaps=()
+notes=()
+for dir in "$PROJECTS"/*; do
+  [ -d "$dir" ] || continue
+  name="$(basename "$dir")"
+  case "$name" in
+    "$CONTROL_NAME")
+      [ -n "$TEST_PROJECTS" ] || notes+=("$name — verified by the isolated source synchronizer, not this dirty control checkout")
+      continue
+      ;;
+    claude-video)
+      [ -n "$TEST_PROJECTS" ] || notes+=("$name — third-party upstream with no local modifications")
+      continue
+      ;;
+  esac
+  if [ ! -d "$dir/.git" ]; then
+    gaps+=("$name — no repository; this folder exists only on this Mac")
+    continue
+  fi
+  url="$(git -C "$dir" remote get-url origin 2>/dev/null || true)"
+  if [ -z "$url" ]; then
+    gaps+=("$name — repository has no remote")
+    continue
+  fi
+  owner="$(printf '%s' "$url" | sed -E 's#.*github\.com[:/]([^/]+)/.*#\1#')"
+  if [ -z "$TEST_PROJECTS" ] && [ "$owner" != "$EXPECTED_OWNER" ]; then
+    gaps+=("$name — remote owner is '$owner', not $EXPECTED_OWNER")
+    continue
+  fi
+  if ! git -C "$dir" rev-parse --verify '@{u}' >/dev/null 2>&1; then
+    gaps+=("$name — current branch has never been pushed")
+    continue
+  fi
+  unpushed="$(git -C "$dir" rev-list --count '@{u}..HEAD' 2>/dev/null || echo 0)"
+  uncommitted="$(git -C "$dir" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
+  [ "$unpushed" = "0" ] || gaps+=("$name — $unpushed commit(s) exist only on this Mac")
+  [ "$uncommitted" = "0" ] || notes+=("$name — $uncommitted uncommitted file(s), handled by its next automatic sync")
+done
+
+sync_detail="test fixture; source sync not invoked"
+if [ -z "$TEST_PROJECTS" ]; then
+  sync_result="$(status_value "$SYNC_STATUS" last_result)"
+  verified="$(status_value "$SYNC_STATUS" last_verified_at)"
+  now="$(date +%s)"
+  if [ "$sync_result" != "verified" ] || ! [[ "$verified" =~ ^[0-9]+$ ]] || [ $((now - verified)) -gt $MAX_VERIFIED_AGE ]; then
+    gaps+=("source archive — last verified backup is missing, failed, or older than 48 hours")
+  elif ! dry_output="$("$SYNC" --rehearse-local --force 2>&1)"; then
+    gaps+=("source archive — its real discovery and secret-scan rehearsal failed")
+    sync_detail="${dry_output//$'\n'/; }"
+  else
+    sync_detail="$(printf '%s' "$dry_output" | head -n 1)"
+    notes+=("source archive rehearsal — $sync_detail")
+  fi
+fi
+
+result="ok"
+[ ${#gaps[@]} -eq 0 ] || result="failed"
+if [ -z "$TEST_PROJECTS" ]; then
+  previous_success="$(status_value "$STATUS" last_success_at)"
+  tmp="$STATUS.tmp.$$"
+  {
+    printf 'last_attempt_at\t%s\n' "$(date +%s)"
+    printf 'last_result\t%s\n' "$result"
+    if [ "$result" = "ok" ]; then
+      printf 'last_success_at\t%s\n' "$(date +%s)"
+    else
+      printf 'last_success_at\t%s\n' "${previous_success:-0}"
+    fi
+    printf 'last_detail\t%s\n' "${sync_detail//$'\t'/ }"
+  } >"$tmp" && mv "$tmp" "$STATUS"
+fi
+
+echo "$NAME"
+if [ ${#notes[@]} -gt 0 ]; then
+  for note in "${notes[@]}"; do echo "  note: $note"; done
+fi
+if [ ${#gaps[@]} -gt 0 ]; then
+  echo "  FAIL: ${#gaps[@]} uncovered item(s):"
+  for gap in "${gaps[@]}"; do echo "    $gap"; done
+  exit 1
+fi
+echo "  ok: the source backup discovered the current machine successfully, and every project has an off-Mac copy"

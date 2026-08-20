@@ -2,26 +2,26 @@
 
 ## Supported status
 
-Switchboard is an unreleased pilot. **Warm Corners** is the only current pilot module, and no public DMG or production installation is supported yet.
+Switchboard is an unreleased project with ready modules and three planned modules: Kinetics, Smart Wake, and Copy Path. There is no public DMG or production installation supported today.
 
 ## Reporting a vulnerability
 
-When the repository has GitHub Security Advisories enabled, use a private GitHub Security Advisory rather than a public issue for a suspected vulnerability. Include a clear description, affected component or module state, reproduction steps that do not expose real data, and the impact you observed.
+When repository Security Advisories are enabled, use a private advisory rather than a public issue. Include the affected module or migration state, safe reproduction steps, and observed impact.
 
-Never post secrets, credentials, private settings, account data, or personal paths in an issue, pull request, log, screenshot, or advisory. Redact them before sharing evidence.
+Never post secrets, credentials, private settings, account data, personal paths, or copied runtime data in an issue, pull request, log, screenshot, or advisory. Redact evidence first.
 
 ## Protected areas
 
 Treat these areas as security-sensitive and require focused review:
 
-- Warm Corners migration, import, rollback, and recovery artifacts.
-- Privileged helpers, LaunchAgents, and any operation that can change installed or system state.
-- Signing, update, release, and distribution logic.
-- Local-read connectors and Apple Mail access.
-- Manifest ownership and availability checks that prevent a standalone worker or Safari app from being absorbed accidentally.
+- The single Switchboard background agent and its bundled command payloads and macOS Services.
+- Recoverable command, service, and scheduler migration, including rollback records. The current workflow does not delete legacy items.
+- GitHub release discovery, download, hash verification, nested updater, and rollback installer.
+- Privileged helpers, login registrations, and operations that can change installed or system state.
+- Local-read connectors, Apple Mail access, and manifest ownership checks.
 
 Do not bypass a permission denial or identity change by broadening access. Stop, record the result, and obtain an explicit decision before continuing.
 
 ## Disclosure expectations
 
-The maintainer will acknowledge a private report, investigate the affected release state, and coordinate a fix or mitigation before public disclosure when practical. Disclosure timing depends on severity, reproducibility, and whether a supported public build exists.
+Investigate private reports and coordinate a fix or mitigation before public disclosure when practical. Disclosure timing depends on severity, reproducibility, and whether a supported public build exists.

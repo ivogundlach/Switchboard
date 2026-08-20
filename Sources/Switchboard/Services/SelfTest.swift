@@ -4,7 +4,8 @@ enum SelfTest {
     static func run() throws {
         guard let manifestURL = Bundle.main.url(forResource: "ModuleManifest", withExtension: "json"),
               let contractURL = Bundle.main.url(forResource: "WarmCornersMigrationContract", withExtension: "json"),
-              let baselineURL = Bundle.main.url(forResource: "InventoryBaseline", withExtension: "json") else {
+              let baselineURL = Bundle.main.url(forResource: "InventoryBaseline", withExtension: "json"),
+              let runtimeURL = Bundle.main.url(forResource: "RuntimeManifest", withExtension: "json") else {
             throw SelfTestError.missingResource
         }
 
@@ -12,6 +13,52 @@ enum SelfTest {
         try ManifestValidator.validate(manifest)
         let baseline = try JSONDecoder().decode(InventoryBaseline.self, from: Data(contentsOf: baselineURL))
         try baseline.validate(manifest)
+        let runtime = try JSONDecoder().decode(RuntimeManifest.self, from: Data(contentsOf: runtimeURL))
+        try RuntimeManifestValidator.validate(runtime, moduleIDs: Set(manifest.modules.map(\.id)))
+        let scheduledOwners = Dictionary(uniqueKeysWithValues: manifest.scheduledComponents.map { ($0.label, $0.owner) })
+        guard runtime.jobs.allSatisfy({ scheduledOwners[$0.label] == "switchboard:\($0.moduleID)" }) else {
+            throw SelfTestError.runtimeOwnershipMismatch
+        }
+        let resourcesURL = Bundle.main.resourceURL!
+        for job in runtime.jobs {
+            let executable = resourcesURL.appending(path: job.executable)
+            let values = try executable.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .isExecutableKey])
+            guard values.isRegularFile == true,
+                  values.isSymbolicLink != true,
+                  values.isExecutable == true else {
+                throw SelfTestError.missingRuntimeExecutable(job.label)
+            }
+        }
+        var bundledCommands: [String: [String]] = [:]
+        for family in manifest.ownedCommandFamilies where family.owner.hasPrefix("switchboard:") {
+            let moduleID = String(family.owner.dropFirst("switchboard:".count))
+            bundledCommands[moduleID, default: []].append(contentsOf: family.items)
+        }
+        bundledCommands["systems.memory", default: []].append(contentsOf: manifest.memoryToolCandidates)
+        for (moduleID, commands) in bundledCommands {
+            for command in commands {
+                let executable = resourcesURL
+                    .appending(path: "Modules/\(moduleID)/bin/\(command)")
+                let values = try executable.resourceValues(
+                    forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .isExecutableKey]
+                )
+                guard values.isRegularFile == true,
+                      values.isSymbolicLink != true,
+                      values.isExecutable == true else {
+                    throw SelfTestError.missingBundledCommand("\(moduleID)/\(command)")
+                }
+            }
+        }
+        for service in manifest.macOSServices where service.owner.hasPrefix("switchboard:") {
+            let workflow = resourcesURL.appending(path: "Services/\(service.name)", directoryHint: .isDirectory)
+            let values = try workflow.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            guard values.isDirectory == true,
+                  values.isSymbolicLink != true,
+                  FileManager.default.fileExists(atPath: workflow.appending(path: "Contents/Info.plist").path),
+                  FileManager.default.fileExists(atPath: workflow.appending(path: "Contents/document.wflow").path) else {
+                throw SelfTestError.missingBundledService(service.name)
+            }
+        }
 
         let contract = try JSONDecoder().decode(
             WarmCornersMigrationContract.self,
@@ -186,6 +233,10 @@ enum SelfTestError: LocalizedError {
     case invalidOwnerReference
     case standaloneWorkerBoundary
     case inventoryBaselineMismatch
+    case runtimeOwnershipMismatch
+    case missingRuntimeExecutable(String)
+    case missingBundledCommand(String)
+    case missingBundledService(String)
 
     var errorDescription: String? {
         switch self {
@@ -201,6 +252,10 @@ enum SelfTestError: LocalizedError {
         case .invalidOwnerReference: "A component refers to an unknown owner."
         case .standaloneWorkerBoundary: "A standalone worker is assigned to the wrong owner."
         case .inventoryBaselineMismatch: "The manifest does not match the locked inventory baseline."
+        case .runtimeOwnershipMismatch: "A runtime job is assigned to the wrong module owner."
+        case .missingRuntimeExecutable(let label): "The bundled runtime executable for \(label) is missing."
+        case .missingBundledCommand(let name): "The bundled command \(name) is missing or unsafe."
+        case .missingBundledService(let name): "The bundled macOS Service \(name) is missing or unsafe."
         }
     }
 }

@@ -1,0 +1,69 @@
+#!/bin/zsh
+# Reports whether configured apps hold a DURABLE code signature.
+#
+# macOS attaches a privacy grant (Accessibility, Calendar, Automation, Full Disk
+# Access, ...) to a program's "designated requirement" -- the rule a future build must
+# satisfy to still count as the same program. Two shapes exist:
+#
+#   certificate leaf = H"..."   the rule names a CERTIFICATE. Rebuild all you like;
+#                               the new build still satisfies it and the grant holds.
+#   cdhash H"..."               the rule names the exact compiled bytes. ANY rebuild
+#                               produces different bytes, so macOS silently treats it
+#                               as a different program and the grant is gone.
+#
+# Ad-hoc signing (`codesign --sign -`) and unsigned bundles both produce the second
+# shape. That is why Amethyst kept losing Accessibility on every build and why the
+# mail sorter lost its Mail access. Any certificate gives the durable shape, so the
+# Safari extensions signed with the Apple Development certificate pass too.
+#
+# Read-only: this never signs, moves, or modifies anything.
+set -uo pipefail
+
+PERSONAL_ID_PATTERN="${SIGNING_AUDIT_ID_PATTERN:-knockoff|psephos}"   # bundle IDs that are locally maintained
+EXTRA_APPS=()
+if [[ -n "${SIGNING_AUDIT_EXTRA_APPS:-}" ]]; then
+  IFS=':' read -r -a EXTRA_APPS <<< "$SIGNING_AUDIT_EXTRA_APPS"
+fi
+fail=0
+durable=(); fragile=()
+
+classify() {
+  local app="$1"
+  local dr
+  dr="$(codesign -d -r- "$app" 2>&1 | grep -m1 'designated' || true)"
+  if [[ -z "$dr" ]]; then print "UNSIGNED"; return; fi
+  if [[ "$dr" == *"certificate leaf"* ]]; then print "DURABLE"; return; fi
+  print "FRAGILE"
+}
+
+check_app() {
+  local app="$1"
+  [[ -d "$app" ]] || return
+  local bid
+  bid="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist" 2>/dev/null || true)"
+  # Only locally maintained software. Third-party apps are signed by their vendors and are
+  # none of our business.
+  [[ "$bid" =~ $PERSONAL_ID_PATTERN ]] || return
+  local state; state="$(classify "$app")"
+  if [[ "$state" == "DURABLE" ]]; then
+    durable+=("${app:t}")
+  else
+    fragile+=("${app:t}|$state|$bid")
+    fail=1
+  fi
+}
+
+for app in /Applications/*.app; do check_app "$app"; done
+for app in $EXTRA_APPS; do check_app "$app"; done
+
+print "signing-audit (are privacy grants safe from the next rebuild?)"
+print "  durable (certificate-signed): ${#durable[@]}"
+if (( ${#fragile[@]} )); then
+  print "  FAIL: ${#fragile[@]} app(s) whose permissions break on the next rebuild:"
+  for row in $fragile; do
+    printf "    %-34s %-9s %s\n" "${row%%|*}" "$(print -r -- "$row" | cut -d'|' -f2)" "$(print -r -- "$row" | cut -d'|' -f3)"
+  done
+else
+  print "  ok: every locally maintained app is certificate-signed"
+fi
+exit $fail

@@ -1,0 +1,266 @@
+#!/usr/bin/env python3
+"""Create a Developer ID-signed, notarized DMG without changing the installed app."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import os
+import plistlib
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+
+DEFAULT_TEAM = os.environ.get("DEVELOPER_ID_TEAM", "")
+DEFAULT_LOCAL_IDENTITY = os.environ.get("DEVELOPER_ID_LOCAL_IDENTITY", "")
+
+
+def fail(message: str) -> "NoReturn":
+    print(f"developer-id-release: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def run(command: list[str], *, capture: bool = False, check: bool = True) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(command, text=True, capture_output=capture)
+    if check and result.returncode:
+        detail = (result.stdout or "") + (result.stderr or "")
+        fail(f"command failed ({command[0]}):\n{detail.strip()}")
+    return result
+
+
+def plist_value(info: dict[str, object], key: str, fallback: str) -> str:
+    value = info.get(key, fallback)
+    return str(value) if value is not None else fallback
+
+
+def collision_safe(path: Path) -> Path:
+    if not path.exists():
+        return path
+    for index in range(2, 1000):
+        candidate = path.with_name(f"{path.stem}-{index}{path.suffix}")
+        if not candidate.exists():
+            return candidate
+    fail(f"could not select a free output name beside {path}")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Cloud-sign, notarize, verify, and package a macOS app as a DMG."
+    )
+    parser.add_argument("--app", required=True, type=Path, help="Path to the source .app bundle")
+    parser.add_argument("--output-dir", required=True, type=Path, help="Directory for the finished DMG")
+    parser.add_argument("--team", default=DEFAULT_TEAM, help="Apple Developer team identifier")
+    parser.add_argument(
+        "--local-identity",
+        default=DEFAULT_LOCAL_IDENTITY,
+        help="Local certificate used only to prepare the disposable archive",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=1200,
+        help="Maximum seconds to wait for Apple notarization (default: 1200)",
+    )
+    parser.add_argument(
+        "--submit",
+        action="store_true",
+        help="Required acknowledgement that this uploads the app to Apple",
+    )
+    args = parser.parse_args()
+
+    if not args.team:
+        fail("Apple Developer team identifier is required (set DEVELOPER_ID_TEAM or pass --team)")
+    if not args.local_identity:
+        fail("local signing identity is required (set DEVELOPER_ID_LOCAL_IDENTITY or pass --local-identity)")
+
+    app = args.app.expanduser().resolve()
+    if not args.submit:
+        fail("refusing to upload without --submit")
+    if not app.is_dir() or app.suffix != ".app":
+        fail(f"app bundle not found: {app}")
+    info_path = app / "Contents" / "Info.plist"
+    if not info_path.is_file():
+        fail(f"Info.plist not found: {info_path}")
+    with info_path.open("rb") as handle:
+        info = plistlib.load(handle)
+
+    display_name = plist_value(info, "CFBundleDisplayName", app.stem)
+    bundle_id = plist_value(info, "CFBundleIdentifier", "")
+    version = plist_value(info, "CFBundleShortVersionString", "1.0")
+    build = plist_value(info, "CFBundleVersion", "1")
+    executable = plist_value(info, "CFBundleExecutable", "")
+    if not bundle_id or not executable:
+        fail("Info.plist must contain CFBundleIdentifier and CFBundleExecutable")
+    executable_path = app / "Contents" / "MacOS" / executable
+    if not executable_path.is_file():
+        fail(f"main executable not found: {executable_path}")
+
+    identity_check = run(["security", "find-identity", "-v", "-p", "codesigning"], capture=True)
+    if args.local_identity not in identity_check.stdout:
+        fail(f"local signing identity is unavailable: {args.local_identity}")
+
+    arch_result = run(["lipo", "-archs", str(executable_path)], capture=True)
+    architectures = arch_result.stdout.strip().split()
+    if not architectures:
+        fail(f"could not determine executable architecture: {executable_path}")
+
+    args.output_dir.expanduser().mkdir(parents=True, exist_ok=True)
+    output_dir = args.output_dir.expanduser().resolve()
+    safe_name = "".join(character if character.isalnum() else "-" for character in display_name).strip("-")
+    while "--" in safe_name:
+        safe_name = safe_name.replace("--", "-")
+    output_path = collision_safe(output_dir / f"{safe_name}-{version}-macOS.dmg")
+
+    with tempfile.TemporaryDirectory(prefix="developer-id-release-") as temporary:
+        temp = Path(temporary)
+        archive = temp / f"{safe_name}.xcarchive"
+        archived_app = archive / "Products" / "Applications" / app.name
+        archived_app.parent.mkdir(parents=True)
+        run(["ditto", str(app), str(archived_app)])
+
+        # The installed copy keeps its existing identity. Only this disposable copy
+        # gains the hardened-runtime flag required for Developer ID notarization.
+        sign_arguments = [
+            "codesign",
+            "--force",
+            "--sign",
+            args.local_identity,
+            "--options",
+            "runtime",
+            "--timestamp=none",
+            # Preserve capabilities, but let the disposable local signature create
+            # requirements for its own certificate. Keeping an Apple Development
+            # requirement makes the nested bundle invalid under the local identity.
+            "--preserve-metadata=identifier,entitlements",
+        ]
+        # Harden every nested Mach-O explicitly. `codesign --deep` verifies nested
+        # code, but it does not reliably apply the runtime option to each helper.
+        for candidate in sorted(archived_app.rglob("*"), key=lambda path: len(path.parts), reverse=True):
+            if not candidate.is_file() or candidate.is_symlink():
+                continue
+            kind = run(["file", "-b", str(candidate)], capture=True).stdout
+            if "Mach-O" in kind:
+                run([*sign_arguments, str(candidate)])
+        code_bundles = [
+            candidate
+            for candidate in archived_app.rglob("*")
+            if candidate.is_dir() and candidate.suffix in {".app", ".appex", ".framework", ".xpc"}
+        ]
+        for candidate in sorted(code_bundles, key=lambda path: len(path.parts), reverse=True):
+            run([*sign_arguments, str(candidate)])
+        run([*sign_arguments, str(archived_app)])
+        run(["codesign", "--verify", "--deep", "--strict", "--verbose=2", str(archived_app)])
+
+        archive_info = {
+            "ApplicationProperties": {
+                "ApplicationPath": f"Applications/{app.name}",
+                "Architectures": architectures,
+                "CFBundleIdentifier": bundle_id,
+                "CFBundleShortVersionString": version,
+                "CFBundleVersion": build,
+                "SigningIdentity": args.local_identity,
+                "Team": args.team,
+            },
+            "ArchiveVersion": 2,
+            "CreationDate": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "Name": display_name,
+            "SchemeName": display_name,
+        }
+        with (archive / "Info.plist").open("wb") as handle:
+            plistlib.dump(archive_info, handle, sort_keys=False)
+
+        options = {
+            "method": "developer-id",
+            "destination": "upload",
+            "signingStyle": "automatic",
+            "teamID": args.team,
+        }
+        options_path = temp / "NotarizeOptions.plist"
+        with options_path.open("wb") as handle:
+            plistlib.dump(options, handle, sort_keys=False)
+
+        run(
+            [
+                "xcodebuild",
+                "-exportArchive",
+                "-archivePath",
+                str(archive),
+                "-exportPath",
+                str(temp / "upload"),
+                "-exportOptionsPlist",
+                str(options_path),
+                "-allowProvisioningUpdates",
+            ]
+        )
+
+        notarized_dir = temp / "notarized"
+        deadline = time.monotonic() + args.timeout
+        while True:
+            if notarized_dir.exists():
+                shutil.rmtree(notarized_dir)
+            result = run(
+                [
+                    "xcodebuild",
+                    "-exportNotarizedApp",
+                    "-archivePath",
+                    str(archive),
+                    "-exportPath",
+                    str(notarized_dir),
+                ],
+                capture=True,
+                check=False,
+            )
+            if result.returncode == 0:
+                break
+            detail = (result.stdout or "") + (result.stderr or "")
+            if "processing and not ready" not in detail:
+                fail(f"notarization export failed:\n{detail.strip()}")
+            if time.monotonic() >= deadline:
+                fail(f"notarization was still processing after {args.timeout} seconds")
+            time.sleep(15)
+
+        exported_apps = list(notarized_dir.glob("*.app"))
+        if len(exported_apps) != 1:
+            fail(f"expected one notarized app, found {len(exported_apps)}")
+        notarized_app = exported_apps[0]
+        run(["codesign", "--verify", "--deep", "--strict", "--verbose=2", str(notarized_app)])
+        run(["xcrun", "stapler", "validate", str(notarized_app)])
+        run(["spctl", "-a", "-vv", "-t", "exec", str(notarized_app)])
+
+        staging = temp / "dmg"
+        staging.mkdir()
+        run(["ditto", str(notarized_app), str(staging / notarized_app.name)])
+        os.symlink("/Applications", staging / "Applications")
+        temporary_dmg = temp / output_path.name
+        run(
+            [
+                "diskutil",
+                "image",
+                "create",
+                "from",
+                "--volumeName",
+                display_name,
+                "--format",
+                "UDZO",
+                str(staging),
+                str(temporary_dmg),
+            ]
+        )
+        run(["hdiutil", "verify", str(temporary_dmg)])
+        shutil.copy2(temporary_dmg, output_path)
+
+    digest = hashlib.sha256(output_path.read_bytes()).hexdigest()
+    print(f"DMG={output_path}")
+    print(f"SHA256={digest}")
+    print(f"APP={display_name}")
+    print(f"BUNDLE_ID={bundle_id}")
+    print(f"VERSION={version} ({build})")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

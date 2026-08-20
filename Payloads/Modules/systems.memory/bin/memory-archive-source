@@ -1,0 +1,210 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+VERSION="1.1.0"
+MAX_TEXT_BYTES=10485760
+MAX_FILE_BYTES=104857600
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  MEMORY_ROOT=/path/to/.memory memory-archive-source \
+    --file /absolute/source --category CATEGORY --safe-to-store
+
+  printf '%s' 'sanitized text' | MEMORY_ROOT=/path/to/.memory \
+    memory-archive-source --stdin --name NAME.txt --category CATEGORY --safe-to-store
+
+Archives inert source evidence under MEMORY_ROOT/raw/files/CATEGORY/.
+The caller must inspect or sanitize content before passing --safe-to-store.
+
+Options:
+  --file PATH          Copy one absolute, regular, non-symlink file.
+  --stdin              Read sanitized UTF-8 text from standard input.
+  --name NAME.txt      Required with --stdin; optional filename override with --file.
+  --category NAME      Lowercase letters, digits, and hyphens only.
+  --safe-to-store      Confirm the source contains no secret that may be persisted.
+  --version            Print the version without changing state.
+  -h, --help           Show this help.
+USAGE
+}
+
+fail() {
+  printf 'memory-archive-source: %s\n' "$1" >&2
+  exit 2
+}
+
+file_size() {
+  stat -f%z "$1" 2>/dev/null || stat -c%s "$1" 2>/dev/null
+}
+
+sanitize_filename() {
+  local raw="$1"
+  local cleaned
+  cleaned="$(printf '%s' "$raw" \
+    | LC_ALL=C sed -E 's#[/\\]+#-#g; s/[^A-Za-z0-9._ -]+/-/g; s/[[:space:]]+/-/g; s/\.{2,}/./g; s/^-+//; s/-+$//')"
+  case "$cleaned" in
+    ''|.*) fail "filename becomes empty or hidden after sanitization" ;;
+  esac
+  printf '%s' "$cleaned" | cut -c1-180
+}
+
+archive_root="${MEMORY_ROOT:-}"
+category=""
+source_path=""
+requested_name=""
+stdin_mode=0
+safe_to_store=0
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --file) source_path="${2:?missing --file value}"; shift 2 ;;
+    --stdin) stdin_mode=1; shift ;;
+    --name) requested_name="${2:?missing --name value}"; shift 2 ;;
+    --category) category="${2:?missing --category value}"; shift 2 ;;
+    --safe-to-store) safe_to_store=1; shift ;;
+    --version) printf 'memory-archive-source %s\n' "$VERSION"; exit 0 ;;
+    -h|--help) usage; exit 0 ;;
+    *) fail "unknown argument: $1" ;;
+  esac
+done
+
+[ -n "$archive_root" ] || fail "MEMORY_ROOT must be set explicitly"
+case "$archive_root" in
+  /*) ;;
+  *) fail "MEMORY_ROOT must be an absolute path" ;;
+esac
+[ -d "$archive_root" ] || fail "MEMORY_ROOT does not exist: $archive_root"
+
+root_physical="$(cd "$archive_root" && pwd -P)"
+[ -f "$root_physical/ledger.ndjson" ] || fail "MEMORY_ROOT is missing ledger.ndjson"
+[ -d "$root_physical/raw/files" ] || fail "MEMORY_ROOT is missing raw/files"
+[ ! -L "$root_physical/raw" ] || fail "MEMORY_ROOT/raw must not be a symlink"
+[ ! -L "$root_physical/raw/files" ] || fail "MEMORY_ROOT/raw/files must not be a symlink"
+files_root="$root_physical/raw/files"
+
+printf '%s' "$category" | LC_ALL=C grep -Eq '^[a-z0-9][a-z0-9-]{0,63}$' \
+  || fail "category must contain only lowercase letters, digits, and hyphens"
+[ "$safe_to_store" -eq 1 ] \
+  || fail "refusing to archive without --safe-to-store confirmation"
+
+if [ "$stdin_mode" -eq 1 ] && [ -n "$source_path" ]; then
+  fail "use exactly one of --file or --stdin"
+fi
+if [ "$stdin_mode" -eq 0 ] && [ -z "$source_path" ]; then
+  fail "use exactly one of --file or --stdin"
+fi
+
+if [ "$stdin_mode" -eq 1 ]; then
+  [ -n "$requested_name" ] || fail "--name is required with --stdin"
+  case "$requested_name" in
+    *.txt) ;;
+    *) fail "pasted text must use a .txt filename" ;;
+  esac
+  archive_name="$(sanitize_filename "$requested_name")"
+else
+  case "$source_path" in
+    /*) ;;
+    *) fail "--file must be an absolute path" ;;
+  esac
+  [ -f "$source_path" ] || fail "source must be a regular file: $source_path"
+  [ ! -L "$source_path" ] || fail "source symlinks are not accepted"
+  source_bytes="$(file_size "$source_path")"
+  [ "$source_bytes" -le "$MAX_FILE_BYTES" ] \
+    || fail "source exceeds the 100 MiB archive limit"
+  if [ -n "$requested_name" ]; then
+    archive_name="$(sanitize_filename "$requested_name")"
+  else
+    archive_name="$(sanitize_filename "$(basename "$source_path")")"
+  fi
+fi
+
+lock_dir="$files_root/.archive.lock"
+lock_acquired=0
+lock_attempt=0
+while [ "$lock_attempt" -lt 50 ]; do
+  if mkdir "$lock_dir" 2>/dev/null; then
+    lock_acquired=1
+    break
+  fi
+  lock_attempt=$((lock_attempt + 1))
+  sleep 0.1
+done
+[ "$lock_acquired" -eq 1 ] \
+  || fail "archive lock remained unavailable for 5 seconds"
+chmod 700 "$lock_dir"
+
+temp_file=""
+cleanup() {
+  if [ -n "$temp_file" ] && [ -e "$temp_file" ]; then
+    rm -f "$temp_file"
+  fi
+  rmdir "$lock_dir" 2>/dev/null || true
+}
+trap cleanup EXIT HUP INT TERM
+
+category_path="$files_root/$category"
+[ ! -L "$category_path" ] || fail "category path must not be a symlink"
+mkdir -p "$category_path"
+chmod 700 "$category_path"
+category_physical="$(cd "$category_path" && pwd -P)"
+[ "$category_physical" = "$files_root/$category" ] \
+  || fail "category resolves outside raw/files"
+
+temp_file="$(mktemp "$category_path/.incoming.XXXXXX")"
+chmod 600 "$temp_file"
+
+if [ "$stdin_mode" -eq 1 ]; then
+  head -c "$((MAX_TEXT_BYTES + 1))" > "$temp_file"
+else
+  cp "$source_path" "$temp_file"
+  chmod 600 "$temp_file"
+fi
+
+archive_bytes="$(file_size "$temp_file")"
+[ "$archive_bytes" -gt 0 ] || fail "source is empty"
+if [ "$stdin_mode" -eq 1 ] && [ "$archive_bytes" -gt "$MAX_TEXT_BYTES" ]; then
+  fail "pasted text exceeds the 10 MiB archive limit"
+fi
+if [ "$stdin_mode" -eq 1 ] && ! iconv -f UTF-8 -t UTF-8 "$temp_file" >/dev/null 2>&1; then
+  fail "pasted text is not valid UTF-8"
+fi
+
+archive_sha="$(shasum -a 256 "$temp_file" | awk '{print $1}')"
+
+while IFS= read -r -d '' existing; do
+  existing_sha="$(shasum -a 256 "$existing" | awk '{print $1}')"
+  if [ "$existing_sha" = "$archive_sha" ]; then
+    chmod 600 "$existing"
+    rm -f "$temp_file"
+    temp_file=""
+    relative_existing="${existing#$root_physical/}"
+    printf 'status=reused\nrelative_path=%s\nsha256=%s\nbytes=%s\n' \
+      "$relative_existing" "$archive_sha" "$archive_bytes"
+    exit 0
+  fi
+done < <(find -P "$files_root" -type f ! -name '.incoming.*' -size "${archive_bytes}c" -print0)
+
+destination="$category_path/$archive_name"
+if [ -e "$destination" ] || [ -L "$destination" ]; then
+  case "$archive_name" in
+    *.*)
+      extension=".${archive_name##*.}"
+      stem="${archive_name%.*}"
+      ;;
+    *)
+      extension=""
+      stem="$archive_name"
+      ;;
+  esac
+  destination="$category_path/${stem}-${archive_sha:0:12}${extension}"
+fi
+[ ! -e "$destination" ] && [ ! -L "$destination" ] \
+  || fail "collision-safe destination already exists"
+
+mv "$temp_file" "$destination"
+temp_file=""
+chmod 600 "$destination"
+
+relative_destination="${destination#$root_physical/}"
+printf 'status=copied\nrelative_path=%s\nsha256=%s\nbytes=%s\n' \
+  "$relative_destination" "$archive_sha" "$archive_bytes"

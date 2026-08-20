@@ -205,18 +205,20 @@ struct MigrationLedgerTests {
 
 struct ModuleSelectionPolicyTests {
     @Test
-    func onlyPilotModulesCanBeEnabled() {
+    func onlyVerifiedModulesCanBeEnabled() {
         let modules = [
             Self.module(id: "pilot", availability: .pilot),
+            Self.module(id: "ready", availability: .ready),
             Self.module(id: "planned", availability: .planned),
             Self.module(id: "repair", availability: .repairRequired),
             Self.module(id: "inventory", availability: .classificationRequired),
         ]
-        #expect(ModuleSelectionPolicy.sanitizedEnabledIDs(Set(modules.map(\.id)), modules: modules) == Set(["pilot"]))
+        #expect(ModuleSelectionPolicy.sanitizedEnabledIDs(Set(modules.map(\.id)), modules: modules) == Set(["pilot", "ready"]))
         #expect(ModuleSelectionPolicy.canEnable(modules[0]))
-        #expect(!ModuleSelectionPolicy.canEnable(modules[1]))
+        #expect(ModuleSelectionPolicy.canEnable(modules[1]))
         #expect(!ModuleSelectionPolicy.canEnable(modules[2]))
         #expect(!ModuleSelectionPolicy.canEnable(modules[3]))
+        #expect(!ModuleSelectionPolicy.canEnable(modules[4]))
     }
 
     private static func module(id: String, availability: ModuleDefinition.Availability) -> ModuleDefinition {

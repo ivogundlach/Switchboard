@@ -1,0 +1,245 @@
+#!/usr/bin/env bash
+# public-toolkit-publish — prepare or approve one exact sanitized public export.
+#
+# Usage:
+#   public-toolkit-publish --prepare
+#   public-toolkit-publish --approve CANDIDATE_ID
+#   public-toolkit-publish --dry-run
+#   public-toolkit-publish --status | --version | --help
+#
+# No argument defaults to --prepare. Preparing never publishes. It stores the
+# exact scanned bytes and prints every changed path. Publishing requires the
+# matching candidate ID, uses those stored bytes without rebuilding, and refuses
+# a candidate older than seven days or based on a changed public branch.
+set -uo pipefail
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+
+NAME="public-toolkit-publish"
+VERSION="2.0.0"
+PROD_PRIVATE_REMOTE="${PUBLIC_TOOLKIT_PRIVATE_REMOTE:-https://github.com/example-owner/private-source-archive.git}"
+PROD_PUBLIC_SLUG="${PUBLIC_TOOLKIT_PUBLIC_SLUG:-example-owner/macos-toolkit}"
+PROD_PUBLIC_REMOTE="https://github.com/${PROD_PUBLIC_SLUG}.git"
+
+TEST_MODE="${PUBLIC_TOOLKIT_TEST_MODE:-0}"
+if [ "$TEST_MODE" = "1" ]; then
+  PRIVATE_REMOTE="${PUBLIC_TOOLKIT_PRIVATE_REMOTE:?test private remote required}"
+  PUBLIC_REMOTE="${PUBLIC_TOOLKIT_PUBLIC_REMOTE:?test public remote required}"
+  PUBLIC_SLUG="${PUBLIC_TOOLKIT_PUBLIC_SLUG:-test/local}"
+else
+  PRIVATE_REMOTE="$PROD_PRIVATE_REMOTE"
+  PUBLIC_REMOTE="$PROD_PUBLIC_REMOTE"
+  PUBLIC_SLUG="$PROD_PUBLIC_SLUG"
+fi
+
+STATE="${PUBLIC_TOOLKIT_STATE:-$HOME/.local/state/public-toolkit-publish}"
+CANDIDATES="$STATE/candidates"
+LOG="$STATE/publish.log"
+STATUS="$STATE/status.tsv"
+LOCK="$STATE/lock"
+LOCK_STALE_SECONDS=$((2 * 60 * 60))
+CANDIDATE_TTL=$((7 * 24 * 60 * 60))
+MODE="prepare"
+APPROVAL=""
+
+usage() { sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; }
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --prepare) MODE="prepare" ;;
+    --dry-run) MODE="dry-run" ;;
+    --approve)
+      [ $# -ge 2 ] || { echo "--approve requires a candidate ID" >&2; exit 2; }
+      MODE="approve"; APPROVAL="$2"; shift
+      ;;
+    --status) [ -f "$STATUS" ] && cat "$STATUS" || echo "no runs recorded"; exit 0 ;;
+    --version|-V) echo "$NAME $VERSION"; exit 0 ;;
+    --help|-h) usage; exit 0 ;;
+    *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
+  esac
+  shift
+done
+
+mkdir -p "$STATE" "$CANDIDATES"
+chmod 700 "$STATE" "$CANDIDATES"
+
+log() { printf '%s %s: %s\n' "$(date +%Y-%m-%dT%H:%M:%S%z)" "$NAME" "$*" >>"$LOG"; }
+write_status() {
+  local tmp="$STATUS.tmp.$$"
+  {
+    printf 'last_attempt_at\t%s\n' "$(date +%s)"
+    printf 'last_result\t%s\n' "$1"
+    printf 'last_detail\t%s\n' "$2"
+    printf 'pending_candidate\t%s\n' "${3:-}"
+  } >"$tmp" && mv "$tmp" "$STATUS"
+}
+fail() { log "FAILED: $*"; write_status "failed" "$*" "${APPROVAL:-}"; echo "$NAME: $*" >&2; exit 1; }
+
+acquire_lock() {
+  local owner age
+  if ln -s "$$" "$LOCK" 2>/dev/null; then return 0; fi
+  owner="$(readlink "$LOCK" 2>/dev/null || true)"
+  if [[ "$owner" =~ ^[0-9]+$ ]] && kill -0 "$owner" 2>/dev/null; then
+    echo "$NAME: another run is active"
+    return 1
+  fi
+  age=$(( $(date +%s) - $(stat -f %m "$LOCK" 2>/dev/null || date +%s) ))
+  [ "$age" -ge "$LOCK_STALE_SECONDS" ] || return 1
+  rm -f "$LOCK" && ln -s "$$" "$LOCK" 2>/dev/null
+}
+
+WORK=""
+cleanup() {
+  [ -z "$WORK" ] || rm -rf "$WORK"
+  [ "$(readlink "$LOCK" 2>/dev/null || true)" != "$$" ] || rm -f "$LOCK"
+}
+trap cleanup EXIT INT TERM
+acquire_lock || exit 0
+
+if [ -f "$LOG" ] && [ "$(stat -f %z "$LOG" 2>/dev/null || echo 0)" -gt 1000000 ]; then
+  tail -c 500000 "$LOG" >"$LOG.trim.$$" && mv "$LOG.trim.$$" "$LOG"
+fi
+find "$CANDIDATES" -mindepth 1 -maxdepth 1 -type d -mtime +7 -exec rm -rf {} + 2>/dev/null || true
+
+tree_digest() {
+  /usr/bin/python3 -c 'import hashlib, os, stat, sys
+root=sys.argv[1]; h=hashlib.sha256()
+for base, dirs, files in os.walk(root):
+    dirs.sort(); files.sort()
+    for name in files:
+        path=os.path.join(base,name); rel=os.path.relpath(path,root).encode()
+        mode=stat.S_IMODE(os.stat(path, follow_symlinks=False).st_mode)
+        h.update(len(rel).to_bytes(8,"big")); h.update(rel); h.update(mode.to_bytes(4,"big"))
+        with open(path,"rb") as f:
+            for chunk in iter(lambda:f.read(1024*1024),b""): h.update(chunk)
+print(h.hexdigest())' "$1"
+}
+
+scan_tree() {
+  local tree="$1"
+  if ! gitleaks detect --no-git --source "$tree" --redact --no-banner >>"$LOG" 2>&1; then
+    return 1
+  fi
+  if grep -rlq "/Users/$USER" "$tree" 2>/dev/null; then
+    return 1
+  fi
+  return 0
+}
+
+replace_tracked_tree() {
+  local repo="$1" tree="$2"
+  ( cd "$repo" && git ls-files -z | xargs -0 rm -f 2>/dev/null )
+  find "$repo" -mindepth 1 -type d -empty -not -path '*/.git/*' -not -name .git -delete 2>/dev/null
+  ( cd "$tree" && tar cf - . ) | ( cd "$repo" && tar xf - )
+  git -C "$repo" add -A
+}
+
+command -v git >/dev/null 2>&1 || fail "git is required"
+command -v gitleaks >/dev/null 2>&1 || fail "gitleaks is required"
+if [ "$TEST_MODE" != "1" ]; then
+  command -v gh >/dev/null 2>&1 || fail "gh is required"
+  gh auth status >/dev/null 2>&1 || fail "GitHub authentication is unavailable"
+fi
+
+if [ "$MODE" = "approve" ]; then
+  [[ "$APPROVAL" =~ ^[0-9a-f]{64}$ ]] || fail "approval must be a 64-character candidate ID"
+  candidate_dir="$CANDIDATES/$APPROVAL"
+  [ -d "$candidate_dir/tree" ] && [ -f "$candidate_dir/meta.tsv" ] && [ -f "$candidate_dir/changes.txt" ] || fail "candidate not found"
+  created="$(awk -F '\t' '$1=="created_epoch"{print $2}' "$candidate_dir/meta.tsv")"
+  source_sha="$(awk -F '\t' '$1=="source_sha"{print $2}' "$candidate_dir/meta.tsv")"
+  public_base="$(awk -F '\t' '$1=="public_base"{print $2}' "$candidate_dir/meta.tsv")"
+  stored_digest="$(awk -F '\t' '$1=="tree_digest"{print $2}' "$candidate_dir/meta.tsv")"
+  [[ "$created" =~ ^[0-9]+$ ]] || fail "candidate metadata is invalid"
+  [ $(( $(date +%s) - created )) -le "$CANDIDATE_TTL" ] || fail "candidate expired; prepare a new one"
+  actual_digest="$(tree_digest "$candidate_dir/tree")" || fail "could not verify candidate bytes"
+  [ "$actual_digest" = "$stored_digest" ] || fail "stored candidate bytes changed after preparation"
+  expected_id="$(printf '%s\n%s\n%s\n' "$source_sha" "$public_base" "$stored_digest" | shasum -a 256 | awk '{print $1}')"
+  [ "$expected_id" = "$APPROVAL" ] || fail "candidate metadata does not match its ID"
+  scan_tree "$candidate_dir/tree" || fail "stored candidate failed the final privacy scan"
+
+  WORK="$(mktemp -d "${TMPDIR:-/tmp}/public-toolkit-approve.XXXXXX")"
+  git clone --quiet "$PUBLIC_REMOTE" "$WORK/public" >>"$LOG" 2>&1 || fail "could not clone the public repository"
+  current_base="$(git -C "$WORK/public" rev-parse origin/main 2>/dev/null || true)"
+  [ "$current_base" = "$public_base" ] || fail "public main changed after preparation; prepare a new candidate"
+  replace_tracked_tree "$WORK/public" "$candidate_dir/tree" || fail "could not stage the stored candidate"
+  git -C "$WORK/public" diff --cached --name-status >"$WORK/changes.txt"
+  cmp -s "$WORK/changes.txt" "$candidate_dir/changes.txt" || fail "stored candidate change list no longer matches"
+  git -C "$WORK/public" diff --cached --quiet && fail "candidate has no changes"
+  git -C "$WORK/public" -c user.name="${PUBLIC_TOOLKIT_AUTHOR_NAME:-Your Name}" -c user.email="${PUBLIC_TOOLKIT_AUTHOR_EMAIL:-you@example.com}" \
+    commit --quiet -m "Refresh public export from approved private source" \
+    -m "Exact candidate $APPROVAL from private snapshot $source_sha." >>"$LOG" 2>&1 || fail "commit failed"
+  remote_now="$(git ls-remote "$PUBLIC_REMOTE" refs/heads/main 2>/dev/null | awk 'NR==1{print $1}')"
+  [ "$remote_now" = "$public_base" ] || fail "public main changed immediately before push; nothing was published"
+  git -C "$WORK/public" push --quiet origin HEAD:main >>"$LOG" 2>&1 || fail "push was rejected; nothing was published"
+  local_sha="$(git -C "$WORK/public" rev-parse HEAD)"
+  remote_sha="$(git ls-remote "$PUBLIC_REMOTE" refs/heads/main 2>/dev/null | awk 'NR==1{print $1}')"
+  [ "$local_sha" = "$remote_sha" ] || fail "remote verification did not match the approved commit"
+  if [ "$TEST_MODE" != "1" ]; then
+    visibility="$(gh repo view "$PUBLIC_SLUG" --json visibility --jq .visibility 2>/dev/null || true)"
+    [ "$visibility" = "PUBLIC" ] || fail "repository visibility verification failed after push"
+  fi
+  rm -rf "$candidate_dir"
+  write_status "ok" "published approved candidate $APPROVAL" ""
+  echo "$NAME: published approved candidate $APPROVAL"
+  exit 0
+fi
+
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/public-toolkit-prepare.XXXXXX")"
+git clone --quiet "$PRIVATE_REMOTE" "$WORK/src" >>"$LOG" 2>&1 || fail "could not clone the private source"
+source_sha="$(git -C "$WORK/src" rev-parse HEAD)" || fail "could not read the private source snapshot"
+if ! python3 "$WORK/src/scripts/build-public-toolkit.py" --source "$WORK/src" --output "$WORK/tree" \
+    --source-sha "$source_sha" --report "$WORK/report.json" >>"$LOG" 2>&1; then
+  fail "the exporter refused to build; nothing was prepared or published"
+fi
+scan_tree "$WORK/tree" || fail "the candidate failed its privacy scan; nothing was prepared or published"
+git clone --quiet "$PUBLIC_REMOTE" "$WORK/public" >>"$LOG" 2>&1 || fail "could not clone the public repository"
+public_base="$(git -C "$WORK/public" rev-parse origin/main)" || fail "could not read the public base"
+if ! gitleaks git --redact --no-banner "$WORK/public" >>"$LOG" 2>&1; then
+  fail "existing public history failed its secret scan"
+fi
+replace_tracked_tree "$WORK/public" "$WORK/tree" || fail "could not compare the candidate"
+if git -C "$WORK/public" diff --cached --quiet; then
+  write_status "ok" "public export already current at source $source_sha" ""
+  echo "$NAME: already current; no candidate created"
+  exit 0
+fi
+git -C "$WORK/public" diff --cached --name-status >"$WORK/changes.txt"
+git -C "$WORK/public" diff --cached --stat >"$WORK/stat.txt"
+digest="$(tree_digest "$WORK/tree")" || fail "could not digest candidate bytes"
+candidate_id="$(printf '%s\n%s\n%s\n' "$source_sha" "$public_base" "$digest" | shasum -a 256 | awk '{print $1}')"
+
+echo "$NAME: candidate from private source $source_sha"
+echo "Changed paths:"
+cat "$WORK/changes.txt"
+echo
+cat "$WORK/stat.txt"
+
+if [ "$MODE" = "dry-run" ]; then
+  write_status "ok" "dry-run completed; no candidate stored" ""
+  echo "$NAME: dry-run complete; no approvable state was created"
+  exit 0
+fi
+
+candidate_tmp="$CANDIDATES/.candidate.$$.tmp"
+rm -rf "$candidate_tmp"
+mkdir -p "$candidate_tmp"
+chmod 700 "$candidate_tmp"
+mv "$WORK/tree" "$candidate_tmp/tree"
+cp "$WORK/changes.txt" "$candidate_tmp/changes.txt"
+cp "$WORK/stat.txt" "$candidate_tmp/stat.txt"
+{
+  printf 'created_epoch\t%s\n' "$(date +%s)"
+  printf 'source_sha\t%s\n' "$source_sha"
+  printf 'public_base\t%s\n' "$public_base"
+  printf 'tree_digest\t%s\n' "$digest"
+} >"$candidate_tmp/meta.tsv"
+# The 0700 parent protects the stored candidate. Preserve the export's own file
+# modes because they are part of the fingerprint the maintainer approves.
+rm -rf "$CANDIDATES/$candidate_id"
+mv "$candidate_tmp" "$CANDIDATES/$candidate_id"
+# A newer preparation supersedes older unapproved proposals. Keep exactly one
+# candidate so the maintainer cannot accidentally approve an obsolete snapshot.
+find "$CANDIDATES" -mindepth 1 -maxdepth 1 -type d ! -name "$candidate_id" -exec rm -rf {} +
+write_status "prepared" "exact candidate awaits explicit approval" "$candidate_id"
+echo
+echo "Candidate ID: $candidate_id"
+echo "Nothing was published. To publish these exact bytes within seven days, explicitly approve this candidate ID."

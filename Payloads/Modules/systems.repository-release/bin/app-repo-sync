@@ -1,0 +1,275 @@
+#!/usr/bin/env bash
+# app-repo-sync — commit and push each owned app's real changes, unattended.
+#
+# Usage:
+#   app-repo-sync [--dry-run] [--app NAME] [--no-push] [--status] [--version]
+#
+# For each app: group the night's changed files by scope (sources, build,
+# resources, docs), then make ONE commit per scope with a deterministic message.
+# A night that touched both the UI and
+# the build script produces two focused commits, not one blob.
+#
+# Safety gates, all fail-closed: sensitive-path check, gitleaks on the staged
+# set, and a deletion circuit breaker — per commit, before it is written.
+# Backup never depends on model access.
+set -uo pipefail
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+
+NAME="app-repo-sync"
+VERSION="1.2.0"
+# shellcheck source=/dev/null
+. "$HOME/.local/bin/app-repo-lib.sh"
+
+mkdir -p "$STATE"
+LOG="$STATE/app-repo-sync.log"
+STATUS="$STATE/status.tsv"
+LOCK="$STATE/lock"
+LOCK_STALE_SECONDS=$((2 * 60 * 60))
+
+DRY_RUN=0
+NO_PUSH=0
+ONLY_APP=""
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --dry-run) DRY_RUN=1 ;;
+    --no-push) NO_PUSH=1 ;;
+    --app) ONLY_APP="${2:-}"; shift ;;
+    --status) [ -f "$STATUS" ] && cat "$STATUS" || echo "no runs recorded"; exit 0 ;;
+    # --version is the Tool Status health probe, and the registry only supports
+    # exists/version/help — so a plain version string would report this tool
+    # green while every repo silently drifted. Report the last run's verified
+    # coverage instead of merely proving the script is installed.
+    --version)
+      echo "$NAME $VERSION"
+      if [ -f "$STATUS" ]; then
+        _res="$(awk -F'\t' '$1=="last_result"{print $2}' "$STATUS")"
+        _det="$(awk -F'\t' '$1=="last_detail"{print $2}' "$STATUS")"
+        if [ -n "$_res" ] && [ "$_res" != "ok" ]; then
+          echo "last run: $_res — $_det" >&2
+          exit 1
+        fi
+      fi
+      exit 0 ;;
+    -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
+    *) echo "unknown argument: $1" >&2; exit 2 ;;
+  esac
+  shift
+done
+
+write_status() {
+  local result="$1" detail="$2"
+  {
+    printf 'last_attempt_at\t%s\n' "$(date +%s)"
+    printf 'last_result\t%s\n' "$result"
+    printf 'last_detail\t%s\n' "$detail"
+  } >"$STATUS.tmp" && mv "$STATUS.tmp" "$STATUS"
+}
+
+# --- lock -------------------------------------------------------------------
+# Atomic, pid-carrying symlink. A stale lock is only cleared once its owner is
+# confirmed dead; a live owner is never stolen from.
+acquire_lock() {
+  local owner age
+  if ln -s "$$" "$LOCK" 2>/dev/null; then return 0; fi
+  owner="$(readlink "$LOCK" 2>/dev/null || echo "")"
+  if [ -n "$owner" ] && kill -0 "$owner" 2>/dev/null; then
+    log "another run (pid $owner) holds the lock; exiting"
+    return 1
+  fi
+  age=$(( $(date +%s) - $(stat -f %m "$LOCK" 2>/dev/null || date +%s) ))
+  if [ "$age" -lt "$LOCK_STALE_SECONDS" ]; then
+    log "lock held by dead pid $owner but is recent (${age}s); exiting"
+    return 1
+  fi
+  log "clearing stale lock from dead pid $owner (${age}s old)"
+  rm -f "$LOCK"
+  ln -s "$$" "$LOCK" 2>/dev/null || return 1
+  return 0
+}
+release_lock() { [ "$(readlink "$LOCK" 2>/dev/null || echo)" = "$$" ] && rm -f "$LOCK"; }
+trap release_lock EXIT
+
+# --- commit message ---------------------------------------------------------
+# Write a stable message from the app, scope, and staged file list.
+generate_message() {
+  local repo="$1" app="$2" scope="$3" files
+  files="$(git -C "$repo" diff --cached --name-only | sed 's/^/  - /')"
+  printf '%s: update %s\n' "$app" "$scope"
+  printf '\n%s\n' "$files"
+}
+
+# --- changed paths ----------------------------------------------------------
+# Every path with an uncommitted change, NUL-delimited.
+#
+# The -z form is mandatory. Plain --porcelain wraps any path containing a space
+# in double quotes, and a quoted path handed back to `git add` matches nothing —
+# so files in directories like "Knockoff Extension/" were staged by nothing,
+# committed by nothing, and pushed by nothing, silently, on every run.
+changed_paths() {
+  local repo="$1" entry code path orig
+  while IFS= read -r -d '' entry; do
+    code="${entry:0:2}"
+    path="${entry:3}"
+    case "$code" in
+      R?|?R|C?|?C)
+        # Rename or copy: the ORIGINAL path follows as its own record. Emit it
+        # too, so staging records the removal of the old path as well.
+        IFS= read -r -d '' orig || orig=""
+        [ -n "$orig" ] && printf '%s\0' "$orig"
+        ;;
+    esac
+    [ -n "$path" ] && printf '%s\0' "$path"
+  done < <(git -C "$repo" status --porcelain -z)
+}
+
+# --- per-app sync -----------------------------------------------------------
+sync_app() {
+  local app="$1" dir="$PROJECTS/$app"
+  local path scope scopes_seen commits=0 msg
+
+  [ -d "$dir/.git" ] || { log "$app: not bootstrapped, skipping"; return 0; }
+
+  git -C "$dir" config user.name >/dev/null 2>&1 || git -C "$dir" config user.name "${APP_REPO_AUTHOR_NAME:-Your Name}"
+  git -C "$dir" config user.email >/dev/null 2>&1 || git -C "$dir" config user.email "${APP_REPO_AUTHOR_EMAIL:-you@example.com}"
+
+  # Nothing staged from a previous aborted run should leak into this one.
+  git -C "$dir" reset --quiet >/dev/null 2>&1
+
+  if [ -z "$(git -C "$dir" status --porcelain)" ]; then
+    log "$app: clean"
+    return 0
+  fi
+
+  # Which scopes changed tonight?
+  scopes_seen=""
+  while IFS= read -r -d '' path; do
+    [ -n "$path" ] || continue
+    scope="$(scope_for_path "$path")"
+    case " $scopes_seen " in *" $scope "*) ;; *) scopes_seen="$scopes_seen $scope" ;; esac
+  done < <(changed_paths "$dir")
+
+  for scope in $scopes_seen; do
+    # Stage only this scope's paths.
+    git -C "$dir" reset --quiet >/dev/null 2>&1
+    while IFS= read -r -d '' path; do
+      [ -n "$path" ] || continue
+      [ "$(scope_for_path "$path")" = "$scope" ] || continue
+      git -C "$dir" add -A -- "$path" >/dev/null 2>&1
+    done < <(changed_paths "$dir")
+
+    git -C "$dir" diff --cached --quiet && continue
+
+    if ! check_sensitive_paths "$dir"; then
+      log "$app/$scope: BLOCKED on sensitive path; leaving uncommitted"
+      git -C "$dir" reset --quiet >/dev/null 2>&1
+      return 1
+    fi
+    if ! deletions_sane "$dir"; then
+      log "$app/$scope: BLOCKED by deletion circuit breaker; leaving uncommitted"
+      git -C "$dir" reset --quiet >/dev/null 2>&1
+      return 1
+    fi
+    if ! gitleaks_clean "$dir"; then
+      log "$app/$scope: BLOCKED by gitleaks; leaving uncommitted"
+      git -C "$dir" reset --quiet >/dev/null 2>&1
+      return 1
+    fi
+
+    if [ "$DRY_RUN" -eq 1 ]; then
+      echo "  dry-run $app/$scope: $(git -C "$dir" diff --cached --name-only | wc -l | tr -d ' ') file(s)"
+      continue
+    fi
+
+    msg="$(generate_message "$dir" "$app" "$scope")"
+    if git -C "$dir" commit --quiet -m "$msg" >>"$LOG" 2>&1; then
+      commits=$((commits + 1))
+      log "$app/$scope: committed — $(printf '%s' "$msg" | head -1)"
+    else
+      log "$app/$scope: commit failed"
+      git -C "$dir" reset --quiet >/dev/null 2>&1
+    fi
+  done
+
+  [ "$DRY_RUN" -eq 1 ] && { git -C "$dir" reset --quiet >/dev/null 2>&1; return 0; }
+  [ "$commits" -eq 0 ] && return 0
+  [ "$NO_PUSH" -eq 1 ] && { echo "  $app: $commits commit(s), push skipped"; return 0; }
+
+  if ! git -C "$dir" remote get-url origin >/dev/null 2>&1; then
+    log "$app: no origin remote; $commits commit(s) held locally"
+    echo "  $app: $commits commit(s), no remote"
+    return 0
+  fi
+  if git -C "$dir" push --quiet origin HEAD >>"$LOG" 2>&1; then
+    echo "  $app: $commits commit(s) pushed"
+    log "$app: pushed $commits commit(s)"
+  else
+    log "$app: push FAILED; $commits commit(s) remain local and will push next run"
+    echo "  $app: $commits commit(s) committed, push failed"
+    return 1
+  fi
+  return 0
+}
+
+# --- coverage audit ---------------------------------------------------------
+# Check the OUTPUT, not the run. Every step above can report success while work
+# is still sitting only on this Mac — that is exactly how the quoted-path bug
+# hid for as long as it did, staging nothing and logging nothing. So after the
+# run, ask the only question that matters: is anything still unsaved?
+#
+# Deliberately independent of the sync logic: it re-reads git rather than
+# trusting any counter this script kept.
+audit_coverage() {
+  local app dir behind uncommitted unpushed gaps=0
+  for app in "${APPS[@]}"; do
+    [ -n "$ONLY_APP" ] && [ "$app" != "$ONLY_APP" ] && continue
+    dir="$PROJECTS/$app"
+    [ -d "$dir/.git" ] || continue
+    uncommitted="$(git -C "$dir" status --porcelain | wc -l | tr -d ' ')"
+    if ! git -C "$dir" remote get-url origin >/dev/null 2>&1; then
+      log "COVERAGE GAP: $app has no origin remote — nothing is backed up"
+      gaps=$((gaps + 1))
+      continue
+    fi
+    # No upstream yet means nothing was ever pushed; count the whole history.
+    if git -C "$dir" rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1; then
+      unpushed="$(git -C "$dir" rev-list --count '@{u}..HEAD' 2>/dev/null || echo 0)"
+    else
+      unpushed="$(git -C "$dir" rev-list --count HEAD 2>/dev/null || echo 0)"
+    fi
+    if [ "$uncommitted" != "0" ] || [ "$unpushed" != "0" ]; then
+      log "COVERAGE GAP: $app — $uncommitted uncommitted file(s), $unpushed unpushed commit(s)"
+      gaps=$((gaps + 1))
+    fi
+  done
+  behind="$gaps"
+  return "$behind"
+}
+
+# --- run --------------------------------------------------------------------
+acquire_lock || exit 0
+
+failed=0
+synced=0
+for app in "${APPS[@]}"; do
+  [ -n "$ONLY_APP" ] && [ "$app" != "$ONLY_APP" ] && continue
+  if sync_app "$app"; then synced=$((synced + 1)); else failed=$((failed + 1)); fi
+done
+
+gaps=0
+if [ "$DRY_RUN" -eq 0 ] && [ "$NO_PUSH" -eq 0 ]; then
+  audit_coverage || gaps=$?
+fi
+
+if [ "$failed" -gt 0 ]; then
+  write_status "partial" "$failed app(s) failed, $synced ok, $gaps app(s) still have unsaved work"
+  log "run finished with $failed failure(s)"
+  exit 1
+fi
+if [ "$gaps" -gt 0 ]; then
+  write_status "partial" "$synced app(s) checked but $gaps still have unsaved work"
+  log "run reported success but $gaps app(s) still hold unsaved work — see COVERAGE GAP lines"
+  exit 1
+fi
+write_status "ok" "$synced app(s) checked, all fully backed up"
+log "run finished clean across $synced app(s), coverage verified"

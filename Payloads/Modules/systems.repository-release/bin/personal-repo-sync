@@ -1,0 +1,869 @@
+#!/usr/bin/env bash
+# personal-repo-sync — safely snapshot configured source into private GitHub.
+#
+# Usage:
+#   personal-repo-sync [--dry-run|--rehearse-local|--auth-check|--refresh-baseline] [--force]
+#                      [--allow-reviewed-large-deletions] [--allow-reviewed-gitleaks-policy]
+#   personal-repo-sync --status | --version | --help
+#   --force bypasses only the six-hour recent-success throttle; all safety gates remain active.
+#   The reviewed memory-redaction fixture is hash-bound before staged gitleaks;
+#   changing its bytes blocks the snapshot even when its ignored fingerprints stay the same.
+#
+# The shared source-archive checkout is a control surface only. Every run uses a
+# fresh shallow clone, so agents and the scheduler never stage, clean, reset, or
+# commit the shared dirty snapshot tree.
+set -uo pipefail
+umask 077
+
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+
+NAME="personal-repo-sync"
+VERSION="1.3.0"
+HOME_DIR="${HOME:-$(cd && pwd -P)}"
+REMOTE="${PERSONAL_REPO_REMOTE:-https://github.com/example-owner/private-source-archive.git}"
+EXPECTED_REMOTE="${PERSONAL_REPO_EXPECTED_REMOTE:-$REMOTE}"
+REPO_SLUG="${PERSONAL_REPO_SLUG:-example-owner/private-source-archive}"
+BRANCH="main"
+CONTROL="${PERSONAL_REPO_CONTROL:-${HOME_DIR}/Projects/source-archive}"
+PRODUCTION_STATE="${PERSONAL_REPO_PRODUCTION_STATE:-$HOME/.local/state/personal-repo-sync}"
+MODE="production"
+ACTION="run"
+STALE_SECONDS=$((48 * 60 * 60))
+THROTTLE_SECONDS=$((6 * 60 * 60))
+LOCK_STALE_SECONDS=$((2 * 60 * 60))
+MAX_DELETIONS=25
+MAX_DELETION_PERCENT=20
+DRY_RUN=0
+ALLOW_LARGE_DELETIONS=0
+ALLOW_REVIEWED_GITLEAKS_POLICY=0
+FORCE_RUN=0
+CURRENT_STAGE=""
+LOCK_HELD=0
+REVIEWED_GITLEAKS_ENTRIES=(
+  "automation/memory-tests/test_redaction.py:gcp-api-key:33"
+  "automation/memory-tests/test_redaction.py:jwt:39"
+  "automation/memory-tests/test_redaction.py:generic-api-key:37"
+  "automation/memory-tests/test_redaction.py:generic-api-key:38"
+  "automation/memory-tests/test_redaction.py:discord-client-id:38"
+)
+FIXTURE_BASELINE_PATH="automation/memory-tests/test_redaction.py"
+FIXTURE_BASELINE_SHA256="${PERSONAL_REPO_FIXTURE_BASELINE_SHA256:-}"
+
+for arg in "$@"; do
+  case "$arg" in
+    --dry-run) MODE="remote-dry-run"; DRY_RUN=1 ;;
+    --rehearse-local) MODE="local-rehearsal"; DRY_RUN=1 ;;
+    --auth-check) MODE="auth-check"; DRY_RUN=1 ;;
+    --refresh-baseline) MODE="baseline-refresh"; DRY_RUN=1 ;;
+    --allow-reviewed-large-deletions) ALLOW_LARGE_DELETIONS=1 ;;
+    --allow-reviewed-gitleaks-policy) ALLOW_REVIEWED_GITLEAKS_POLICY=1 ;;
+    --force) FORCE_RUN=1 ;;
+    --status) ACTION="status" ;;
+    --version|-V) ACTION="version" ;;
+    --help|-h) ACTION="help" ;;
+    *) echo "Unknown argument: $arg" >&2; ACTION="invalid" ;;
+  esac
+done
+
+case "$MODE" in
+  production) STATE="${PERSONAL_REPO_STATE:-$PRODUCTION_STATE}" ;;
+  remote-dry-run) STATE="${PERSONAL_REPO_STATE:-$PRODUCTION_STATE/dry-run}" ;;
+  local-rehearsal) STATE="${PERSONAL_REPO_STATE:-$HOME/.local/state/backup-coverage-audit/rehearsal-sync}" ;;
+  auth-check) STATE="${PERSONAL_REPO_STATE:-$PRODUCTION_STATE/auth-check}" ;;
+  baseline-refresh) STATE="${PERSONAL_REPO_STATE:-$PRODUCTION_STATE/baseline-refresh}" ;;
+esac
+
+if [ "$MODE" != "production" ] && [ "$STATE" = "$PRODUCTION_STATE" ]; then
+  echo "$NAME: non-production mode refuses the production state root" >&2
+  exit 2
+fi
+
+STATUS="$STATE/status.tsv"
+LOG="$STATE/personal-repo-sync.log"
+LOCK="$PRODUCTION_STATE/coordination.lock"
+PRODUCTION_STATUS="$PRODUCTION_STATE/status.tsv"
+BASELINE_POINTER="$PRODUCTION_STATE/baseline.tsv"
+BASELINE_ROOT="$PRODUCTION_STATE/baselines"
+
+mkdir -p "$STATE" "$PRODUCTION_STATE"
+chmod 700 "$STATE" "$PRODUCTION_STATE"
+STATE_REAL="$(cd "$STATE" && pwd -P)"
+PRODUCTION_STATE_REAL="$(cd "$PRODUCTION_STATE" && pwd -P)"
+if [ "$MODE" != "production" ] && [ "$STATE_REAL" = "$PRODUCTION_STATE_REAL" ]; then
+  echo "$NAME: non-production mode resolved to the production state root" >&2
+  exit 2
+fi
+
+log() {
+  printf '%s %s: %s\n' "$(date +%Y-%m-%dT%H:%M:%S%z)" "$NAME" "$*" >>"$LOG"
+}
+
+state_value() {
+  local key="$1"
+  [ -f "$STATUS" ] || return 0
+  awk -F '\t' -v key="$key" '$1 == key { value=$2 } END { print value }' "$STATUS"
+}
+
+write_status() {
+  local result="$1"
+  local detail="$2"
+  local commit="${3:-}"
+  local verified_at="${4:-$(state_value last_verified_at)}"
+  local tmp="$STATE/status.tsv.tmp.$$"
+  {
+    printf 'last_attempt_at\t%s\n' "$(date +%s)"
+    printf 'last_result\t%s\n' "$result"
+    printf 'last_detail\t%s\n' "$detail"
+    printf 'last_commit\t%s\n' "$commit"
+    printf 'last_verified_at\t%s\n' "${verified_at:-0}"
+  } >"$tmp"
+  mv "$tmp" "$STATUS"
+}
+
+status_output() {
+  if [ ! -f "$STATUS" ]; then
+    echo "personal-repo-sync: no completed attempt yet"
+    return 0
+  fi
+  awk -F '\t' '
+    $1 == "last_attempt_at" { attempt=$2 }
+    $1 == "last_result" { result=$2 }
+    $1 == "last_detail" { detail=$2 }
+    $1 == "last_commit" { commit=$2 }
+    $1 == "last_verified_at" { verified=$2 }
+    END {
+      print "result: " result
+      print "detail: " detail
+      print "commit: " commit
+      print "last_attempt_epoch: " attempt
+      print "last_verified_epoch: " verified
+    }
+  ' "$STATUS"
+}
+
+usage() {
+  sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+}
+
+case "$ACTION" in
+  status) STATE="$PRODUCTION_STATE"; STATUS="$PRODUCTION_STATUS"; status_output; exit 0 ;;
+  version) echo "personal-repo-sync $VERSION"; exit 0 ;;
+  help) usage; exit 0 ;;
+  invalid) usage >&2; exit 2 ;;
+esac
+
+release_lock() {
+  if [ "$LOCK_HELD" -eq 1 ] && [ -d "$LOCK" ]; then
+    local owner
+    owner="$(cat "$LOCK/pid" 2>/dev/null || true)"
+    if [ "$owner" = "$$" ]; then
+      /bin/rm -f "$LOCK/pid" "$LOCK/start" "$LOCK/command"
+      rmdir "$LOCK" 2>/dev/null || true
+    fi
+  fi
+}
+
+cleanup_stage() {
+  if [ -n "$CURRENT_STAGE" ] && [ -d "$CURRENT_STAGE" ]; then
+    /bin/rm -rf "$CURRENT_STAGE"
+    CURRENT_STAGE=""
+  fi
+}
+
+cleanup() {
+  cleanup_stage
+  release_lock
+}
+trap cleanup EXIT INT TERM
+
+production_value() {
+  local key="$1"
+  [ -f "$PRODUCTION_STATUS" ] || return 0
+  awk -F '\t' -v key="$key" '$1 == key { value=$2 } END { print value }' "$PRODUCTION_STATUS"
+}
+
+baseline_value() {
+  local key="$1"
+  [ -f "$BASELINE_POINTER" ] || return 0
+  awk -F '\t' -v key="$key" '$1 == key { value=$2 } END { print value }' "$BASELINE_POINTER"
+}
+
+cache_baseline() {
+  local repo="$1" commit="$2" tree target tmp pointer_tmp
+  [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || return 1
+  [ ! -L "$PRODUCTION_STATE" ] || return 1
+  mkdir -p "$BASELINE_ROOT"
+  chmod 700 "$BASELINE_ROOT"
+  [ ! -L "$BASELINE_ROOT" ] || return 1
+  tree="$(git -C "$repo" rev-parse "$commit^{tree}" 2>/dev/null || true)"
+  [[ "$tree" =~ ^[0-9a-f]{40}$ ]] || return 1
+  target="$BASELINE_ROOT/$commit.git"
+  if [ ! -d "$target" ]; then
+    tmp="$BASELINE_ROOT/.${commit}.tmp.$$"
+    /bin/rm -rf "$tmp"
+    if ! git clone --quiet --bare --no-local "$repo" "$tmp" >>"$LOG" 2>&1; then
+      /bin/rm -rf "$tmp"
+      return 1
+    fi
+    chmod -R go-rwx "$tmp"
+    [ "$(git --git-dir "$tmp" rev-parse HEAD 2>/dev/null || true)" = "$commit" ] || { /bin/rm -rf "$tmp"; return 1; }
+    [ "$(git --git-dir "$tmp" rev-parse 'HEAD^{tree}' 2>/dev/null || true)" = "$tree" ] || { /bin/rm -rf "$tmp"; return 1; }
+    if ! mv "$tmp" "$target"; then
+      /bin/rm -rf "$tmp"
+      return 1
+    fi
+  fi
+  [ ! -L "$target" ] || return 1
+  [ "$(git --git-dir "$target" rev-parse HEAD 2>/dev/null || true)" = "$commit" ] || return 1
+  [ "$(git --git-dir "$target" rev-parse 'HEAD^{tree}' 2>/dev/null || true)" = "$tree" ] || return 1
+  pointer_tmp="$PRODUCTION_STATE/baseline.tsv.tmp.$$"
+  {
+    printf 'schema\t1\n'
+    printf 'commit\t%s\n' "$commit"
+    printf 'tree\t%s\n' "$tree"
+    printf 'remote\t%s\n' "$EXPECTED_REMOTE"
+    printf 'verified_at\t%s\n' "$(date +%s)"
+  } >"$pointer_tmp"
+  chmod 600 "$pointer_tmp"
+  mv "$pointer_tmp" "$BASELINE_POINTER"
+}
+
+validated_local_baseline() {
+  local result commit pointer_commit pointer_tree pointer_remote target actual_tree
+  [ -f "$PRODUCTION_STATUS" ] && [ ! -L "$PRODUCTION_STATUS" ] || return 1
+  [ -f "$BASELINE_POINTER" ] && [ ! -L "$BASELINE_POINTER" ] || return 1
+  result="$(production_value last_result)"
+  commit="$(production_value last_commit)"
+  pointer_commit="$(baseline_value commit)"
+  pointer_tree="$(baseline_value tree)"
+  pointer_remote="$(baseline_value remote)"
+  [ "$result" = "verified" ] || return 1
+  [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || return 1
+  [ "$pointer_commit" = "$commit" ] || return 1
+  [ "$pointer_remote" = "$EXPECTED_REMOTE" ] || return 1
+  target="$BASELINE_ROOT/$commit.git"
+  [ -d "$target" ] && [ ! -L "$target" ] || return 1
+  [ "$(stat -f %u "$target" 2>/dev/null || echo -1)" = "$(id -u)" ] || return 1
+  [ "$(git --git-dir "$target" rev-parse HEAD 2>/dev/null || true)" = "$commit" ] || return 1
+  actual_tree="$(git --git-dir "$target" rev-parse 'HEAD^{tree}' 2>/dev/null || true)"
+  [ "$actual_tree" = "$pointer_tree" ] || return 1
+  git --git-dir "$target" fsck --no-dangling >/dev/null 2>&1 || return 1
+  printf '%s\n' "$commit"
+}
+
+production_manifest_hash() {
+  (
+    cd "$PRODUCTION_STATE" || exit 1
+    while IFS= read -r -d '' path; do
+      case "$path" in
+        ./coordination.lock|./coordination.lock/*|./dry-run|./dry-run/*|./auth-check|./auth-check/*|./baseline-refresh|./baseline-refresh/*) continue ;;
+      esac
+      if [ -L "$path" ]; then
+        printf 'L\t%s\t%s\t%s\n' "$path" "$(stat -f %Lp "$path")" "$(readlink "$path")"
+      elif [ -d "$path" ]; then
+        printf 'D\t%s\t%s\n' "$path" "$(stat -f %Lp "$path")"
+      elif [ -f "$path" ]; then
+        printf 'F\t%s\t%s\t%s\t%s\n' "$path" "$(stat -f %Lp "$path")" \
+          "$(stat -f %z "$path")" "$(shasum -a 256 "$path" | cut -d ' ' -f 1)"
+      fi
+    done < <(find . -mindepth 1 -print0 | sort -z)
+  ) | shasum -a 256 | cut -d ' ' -f 1
+}
+
+acquire_lock() {
+  if mkdir "$LOCK" 2>/dev/null; then
+    LOCK_HELD=1
+    printf '%s\n' "$$" >"$LOCK/pid"
+    ps -p "$$" -o lstart= | sed 's/^[[:space:]]*//' >"$LOCK/start"
+    ps -p "$$" -o command= | sed 's/^[[:space:]]*//' >"$LOCK/command"
+    return 0
+  fi
+
+  local pid recorded_start recorded_command live_start live_command age now mtime
+  pid="$(cat "$LOCK/pid" 2>/dev/null || true)"
+  recorded_start="$(cat "$LOCK/start" 2>/dev/null || true)"
+  recorded_command="$(cat "$LOCK/command" 2>/dev/null || true)"
+  live_start=""
+  live_command=""
+  if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+    live_start="$(ps -p "$pid" -o lstart= 2>/dev/null | sed 's/^[[:space:]]*//')"
+    live_command="$(ps -p "$pid" -o command= 2>/dev/null | sed 's/^[[:space:]]*//')"
+    if [ -n "$recorded_start" ] &&
+       [ "$recorded_start" = "$live_start" ] &&
+       [ "$recorded_command" = "$live_command" ]; then
+      log "overlap skipped; verified owner pid=$pid is live"
+      exit 0
+    fi
+  fi
+
+  now="$(date +%s)"
+  mtime="$(stat -f %m "$LOCK" 2>/dev/null || echo "$now")"
+  age=$((now - mtime))
+  if [ "$age" -lt "$LOCK_STALE_SECONDS" ]; then
+    log "lock owner is not verifiably live but lock is only ${age}s old"
+    write_status "failed" "unverified lock younger than recovery threshold"
+    exit 1
+  fi
+
+  local retired="$STATE/lock.stale.$now"
+  if ! mv "$LOCK" "$retired"; then
+    log "failed to retire stale lock"
+    write_status "failed" "could not recover stale lock"
+    exit 1
+  fi
+  log "retired stale lock after ${age}s"
+  if ! mkdir "$LOCK"; then
+    write_status "failed" "lock race during stale recovery"
+    exit 1
+  fi
+  LOCK_HELD=1
+  printf '%s\n' "$$" >"$LOCK/pid"
+  ps -p "$$" -o lstart= | sed 's/^[[:space:]]*//' >"$LOCK/start"
+  ps -p "$$" -o command= | sed 's/^[[:space:]]*//' >"$LOCK/command"
+}
+
+acquire_lock
+
+# Bound logs and remove only this worker's old disposable state.
+if [ -f "$LOG" ] && [ "$(stat -f %z "$LOG" 2>/dev/null || echo 0)" -gt 1000000 ]; then
+  tail -c 500000 "$LOG" >"$STATE/log.trim.$$"
+  mv "$STATE/log.trim.$$" "$LOG"
+fi
+find "$STATE" -maxdepth 1 -type d -name 'stage.*' -mtime +0 \
+  ! -path "$CURRENT_STAGE" -exec /bin/rm -rf {} + 2>/dev/null || true
+find "$STATE" -maxdepth 1 -type d -name 'lock.stale.*' -mtime +7 \
+  -exec /bin/rm -rf {} + 2>/dev/null || true
+
+now="$(date +%s)"
+last_verified="$(state_value last_verified_at)"
+last_verified="${last_verified:-0}"
+if [ "$MODE" = "production" ] &&
+   [ "$FORCE_RUN" -eq 0 ] &&
+   [ "$DRY_RUN" -eq 0 ] &&
+   [ "$last_verified" -gt 0 ] &&
+   [ $((now - last_verified)) -lt "$THROTTLE_SECONDS" ]; then
+  log "recent verified run; RunAtLoad/catch-up skipped"
+  exit 0
+fi
+
+defer_offline() {
+  local age
+  age=$((now - last_verified))
+  if [ "$last_verified" -gt 0 ] && [ "$age" -ge "$STALE_SECONDS" ]; then
+    log "FAILED: offline and verified archive is stale (${age}s)"
+    write_status "failed" "offline; verified archive older than 48 hours"
+    exit 1
+  fi
+  log "offline; run deferred"
+  write_status "deferred" "offline; no repository state changed"
+  exit 0
+}
+
+if [ "$MODE" != "local-rehearsal" ]; then
+  if [ "${PERSONAL_REPO_FORCE_OFFLINE:-0}" = "1" ]; then
+    defer_offline
+  fi
+  if ! curl -fsS -m 8 -o /dev/null https://www.gstatic.com/generate_204 2>/dev/null; then
+    defer_offline
+  fi
+fi
+
+if [ "$REMOTE" != "$EXPECTED_REMOTE" ] && [ "${PERSONAL_REPO_TEST_MODE:-0}" != "1" ]; then
+  log "BLOCKED: unexpected remote"
+  write_status "failed" "unexpected remote"
+  exit 1
+fi
+
+if [ "$MODE" != "local-rehearsal" ] && [ "${PERSONAL_REPO_TEST_MODE:-0}" != "1" ]; then
+  if ! gh auth status -h github.com >/dev/null 2>&1; then
+    log "BLOCKED: GitHub authentication unavailable"
+    write_status "failed" "GitHub authentication unavailable"
+    exit 1
+  fi
+  visibility="$(gh repo view "$REPO_SLUG" --json visibility --jq .visibility 2>/dev/null || true)"
+  if [ "$visibility" != "PRIVATE" ]; then
+    log "BLOCKED: repository visibility is not PRIVATE"
+    write_status "failed" "repository is not verified private"
+    exit 1
+  fi
+fi
+
+if [ "$MODE" = "local-rehearsal" ]; then
+  production_status_before="$(shasum -a 256 "$PRODUCTION_STATUS" 2>/dev/null | awk '{print $1}')"
+  production_state_before="$(production_manifest_hash)"
+  remote_sha="$(validated_local_baseline || true)"
+else
+  remote_sha="$(git ls-remote "$REMOTE" "refs/heads/$BRANCH" 2>/dev/null | awk 'NR==1 {print $1}')"
+fi
+if [[ ! "$remote_sha" =~ ^[0-9a-f]{40}$ ]]; then
+  if [ "$MODE" = "local-rehearsal" ]; then
+    log "BLOCKED: verified local baseline is unavailable or inconsistent"
+    write_status "failed" "verified local baseline unavailable"
+  else
+    log "BLOCKED: read-only remote probe failed"
+    write_status "failed" "could not resolve remote main SHA"
+  fi
+  exit 1
+fi
+
+if [ "$MODE" = "auth-check" ]; then
+  auth_proof_tmp="$STATE/auth-proof.tsv.tmp.$$"
+  {
+    printf 'schema\t1\n'
+    printf 'repository\t%s\n' "$REPO_SLUG"
+    printf 'visibility\tPRIVATE\n'
+    printf 'remote\t%s\n' "$EXPECTED_REMOTE"
+    printf 'commit\t%s\n' "$remote_sha"
+    printf 'gh_path\t%s\n' "$(command -v gh)"
+    printf 'git_path\t%s\n' "$(command -v git)"
+    printf 'verified_at\t%s\n' "$(date +%s)"
+  } >"$auth_proof_tmp"
+  chmod 600 "$auth_proof_tmp"
+  mv "$auth_proof_tmp" "$STATE/auth-proof.tsv"
+  write_status "verified" "GitHub authentication, private visibility, and remote identity verified" "$remote_sha" "$(date +%s)"
+  printf 'auth-check: verified private remote %s at %s\n' "$REPO_SLUG" "$remote_sha"
+  exit 0
+fi
+
+if [ "$MODE" = "baseline-refresh" ]; then
+  CURRENT_STAGE="$(mktemp -d "$STATE/stage.XXXXXX")"
+  if ! git clone --quiet --depth 1 --single-branch --branch "$BRANCH" "$REMOTE" "$CURRENT_STAGE/repo" >>"$LOG" 2>&1; then
+    write_status "failed" "baseline refresh clone failed"
+    exit 1
+  fi
+  if [ "$(git -C "$CURRENT_STAGE/repo" rev-parse HEAD 2>/dev/null || true)" != "$remote_sha" ] ||
+     ! cache_baseline "$CURRENT_STAGE/repo" "$remote_sha"; then
+    write_status "failed" "baseline refresh integrity check failed"
+    exit 1
+  fi
+  write_status "verified" "local rehearsal baseline refreshed" "$remote_sha" "$(date +%s)"
+  printf 'baseline-refresh: cached %s\n' "$remote_sha"
+  exit 0
+fi
+
+gitleaks_version="$(gitleaks version 2>/dev/null || true)"
+gitleaks_semver="$(printf '%s' "$gitleaks_version" | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+if [ -z "$gitleaks_semver" ]; then
+  log "BLOCKED: gitleaks unavailable or unparseable"
+  write_status "failed" "gitleaks unavailable or unparseable"
+  exit 1
+fi
+IFS=. read -r gl_major gl_minor gl_patch <<<"$gitleaks_semver"
+if [ "$gl_major" -lt 8 ] ||
+   { [ "$gl_major" -eq 8 ] && [ "$gl_minor" -lt 30 ]; } ||
+   { [ "$gl_major" -eq 8 ] && [ "$gl_minor" -eq 30 ] && [ "$gl_patch" -lt 1 ]; }; then
+  log "BLOCKED: gitleaks $gitleaks_semver is older than 8.30.1"
+  write_status "failed" "gitleaks is older than 8.30.1"
+  exit 1
+fi
+if ! gitleaks git --help 2>/dev/null | grep -q -- '--staged'; then
+  log "BLOCKED: installed gitleaks lacks git --staged"
+  write_status "failed" "gitleaks staged-scan syntax is incompatible"
+  exit 1
+fi
+
+preflight_sources() {
+  local app dir
+  local apps=(
+    CanIAffordThis CopyPathFinder ElectionSimulator ForceCopyPaste Kinetics
+    MacroSimulator Market NewTabLinks NutrientTracker ReleaseRadar School ToolStatusDashboard
+    UsageQueue Vitals WarmCorners
+    YouTubeFirstContentTab YouTubeHomeReload
+  )
+  for app in "${apps[@]}"; do
+    dir="${HOME_DIR}/Projects/$app"
+    if [ ! -d "$dir" ] || [ -z "$(find "$dir" -type f -print -quit 2>/dev/null)" ]; then
+      log "BLOCKED: required source root missing or empty: $dir"
+      write_status "failed" "required source root missing or empty: $app"
+      return 1
+    fi
+  done
+  for dir in \
+    "${HOME_DIR}/.codex/skills" \
+    "${HOME_DIR}/.memory/tools"; do
+    if [ ! -d "$dir" ] || [ -z "$(find "$dir" -type f -print -quit 2>/dev/null)" ]; then
+      log "BLOCKED: required automation root missing or empty: $dir"
+      write_status "failed" "required automation root missing or empty"
+      return 1
+    fi
+  done
+  for dir in \
+    "${HOME_DIR}/.codex/AGENTS.md" \
+    "${HOME_DIR}/.local/share/codex-connectors/read_connectors.py" \
+    "${HOME_DIR}/.local/share/codex-connectors/gws-login-readonly.sh"; do
+    if [ ! -s "$dir" ]; then
+      log "BLOCKED: required source file missing or empty: $dir"
+      write_status "failed" "required singleton source missing or empty"
+      return 1
+    fi
+  done
+  return 0
+}
+
+if [ "${PERSONAL_REPO_TEST_MODE:-0}" != "1" ]; then
+  preflight_sources || exit 1
+fi
+
+copy_control_files() {
+  local target="$1"
+  [ -s "$CONTROL/README.md" ] || return 1
+  [ -s "$CONTROL/.gitignore" ] || return 1
+  [ -x "$CONTROL/scripts/sync-from-machine.sh" ] || return 1
+  [ -f "$CONTROL/.gitleaksignore" ] || return 1
+  [ ! -L "$CONTROL/.gitleaksignore" ] || return 1
+  cp -p "$CONTROL/README.md" "$target/README.md" || return 1
+  cp -p "$CONTROL/.gitignore" "$target/.gitignore" || return 1
+  cp -p "$CONTROL/.gitleaksignore" "$target/.gitleaksignore" || return 1
+  mkdir -p "$target/docs" "$target/scripts"
+  rsync -a --delete "$CONTROL/docs/" "$target/docs/" || return 1
+  rsync -a --delete "$CONTROL/scripts/" "$target/scripts/" || return 1
+}
+
+check_sensitive_paths() {
+  local repo="$1" path
+  while IFS= read -r -d '' path; do
+    case "$path" in
+      *.env|*/.env|*/.env.*)
+        case "$path" in
+          *.env.example|*.env.*.example) ;;
+          *) log "BLOCKED: staged sensitive environment path"; return 1 ;;
+        esac
+        ;;
+      *.pem|*.key|*.p12|*.mobileprovision|.memory/*|*/.memory/*)
+        log "BLOCKED: staged sensitive path class"
+        return 1
+        ;;
+    esac
+  done < <(git -C "$repo" diff --cached --name-only -z)
+  return 0
+}
+
+reviewed_gitleaks_ignore_valid() {
+  local file="$1" line normalized count=0 expected matches
+  [ -f "$file" ] || return 1
+  [ ! -L "$file" ] || return 1
+  while IFS= read -r line || [ -n "$line" ]; do
+    normalized="${line#"${line%%[![:space:]]*}"}"
+    normalized="${normalized%"${normalized##*[![:space:]]}"}"
+    [ -z "$normalized" ] && continue
+    [[ "$normalized" == \#* ]] && continue
+    count=$((count + 1))
+    case "$normalized" in
+      "${REVIEWED_GITLEAKS_ENTRIES[0]}"|"${REVIEWED_GITLEAKS_ENTRIES[1]}"|"${REVIEWED_GITLEAKS_ENTRIES[2]}"|"${REVIEWED_GITLEAKS_ENTRIES[3]}"|"${REVIEWED_GITLEAKS_ENTRIES[4]}") ;;
+      *) return 1 ;;
+    esac
+  done <"$file"
+  [ "$count" -eq "${#REVIEWED_GITLEAKS_ENTRIES[@]}" ] || return 1
+  for expected in "${REVIEWED_GITLEAKS_ENTRIES[@]}"; do
+    matches="$(awk -v expected="$expected" '
+      /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
+      { line=$0; sub(/^[[:space:]]+/, "", line); sub(/[[:space:]]+$/, "", line); if (line == expected) n++ }
+      END { print n+0 }
+    ' "$file")"
+    [ "$matches" -eq 1 ] || return 1
+  done
+  return 0
+}
+
+log_policy_metadata() {
+  local file="$1" count hash
+  count="$(awk 'NF && $1 !~ /^#/ {n++} END {print n+0}' "$file")"
+  hash="$(shasum -a 256 "$file" | awk '{print $1}')"
+  log "gitleaks policy file=$(basename "$file") entries=$count sha256=$hash"
+}
+
+log_allowlists() {
+  local repo="$1" file count hash remote_policy remote_hash control_hash
+  local remote_present=0
+  local remote_tmp="$repo/.gitleaksignore.remote.$$"
+
+  if [ ! -f "$repo/.gitleaksignore" ] || [ -L "$repo/.gitleaksignore" ]; then
+    log "BLOCKED: .gitleaksignore control file missing or symlinked"
+    return 1
+  fi
+  if ! reviewed_gitleaks_ignore_valid "$repo/.gitleaksignore"; then
+    log "BLOCKED: .gitleaksignore contains unreviewed entries"
+    return 1
+  fi
+
+  if git -C "$repo" cat-file -e HEAD:.gitleaksignore 2>/dev/null; then
+    remote_present=1
+    if ! git -C "$repo" show HEAD:.gitleaksignore >"$remote_tmp"; then
+      log "BLOCKED: could not read origin/main .gitleaksignore"
+      /bin/rm -f "$remote_tmp"
+      return 1
+    fi
+    if ! reviewed_gitleaks_ignore_valid "$remote_tmp"; then
+      log "BLOCKED: origin/main .gitleaksignore contains unreviewed entries"
+      /bin/rm -f "$remote_tmp"
+      return 1
+    fi
+  fi
+
+  control_hash="$(shasum -a 256 "$repo/.gitleaksignore" | awk '{print $1}')"
+  remote_hash=""
+  if [ "$remote_present" -eq 1 ]; then
+    remote_hash="$(shasum -a 256 "$remote_tmp" | awk '{print $1}')"
+  fi
+  if [ "$remote_present" -eq 0 ] || [ "$control_hash" != "$remote_hash" ]; then
+    if [ "$ALLOW_REVIEWED_GITLEAKS_POLICY" -ne 1 ]; then
+      log "BLOCKED: .gitleaksignore differs from origin/main"
+      [ -z "$remote_hash" ] || log "origin/main gitleaks policy file=.gitleaksignore sha256=$remote_hash"
+      /bin/rm -f "$remote_tmp"
+      return 1
+    fi
+    log_policy_metadata "$repo/.gitleaksignore"
+  else
+    log_policy_metadata "$repo/.gitleaksignore"
+  fi
+  /bin/rm -f "$remote_tmp"
+
+  file=".gitleaks.toml"
+  if [ -f "$repo/$file" ]; then
+    if ! git -C "$repo" diff --quiet HEAD -- "$file"; then
+      log "BLOCKED: $file differs from origin/main"
+      return 1
+    fi
+    count="$(awk 'NF && $1 !~ /^#/ {n++} END {print n+0}' "$repo/$file")"
+    hash="$(shasum -a 256 "$repo/$file" | awk '{print $1}')"
+    log "active allowlist file=$file entries=$count sha256=$hash"
+  fi
+  return 0
+}
+
+fixture_baseline_valid() {
+  local repo="$1" candidate="$repo/$FIXTURE_BASELINE_PATH"
+  local staged_record staged_mode staged_count staged_sha worktree_sha
+
+  if [ -z "$FIXTURE_BASELINE_SHA256" ]; then
+    log "BLOCKED: fixture baseline hash is not configured"
+    return 1
+  fi
+
+  # This fixture is deliberately bound to reviewed bytes.  Check both the
+  # staged candidate and the worktree copy immediately before gitleaks; a
+  # changed line must not become acceptable merely because its old fingerprint
+  # remains in the exact five-entry ignore file.
+  if [ ! -f "$candidate" ] || [ -L "$candidate" ]; then
+    log "BLOCKED: fixture hash mismatch path=$FIXTURE_BASELINE_PATH expected=$FIXTURE_BASELINE_SHA256 actual=<missing-or-nonregular>"
+    return 1
+  fi
+
+  staged_record="$(git -C "$repo" ls-files -s -- "$FIXTURE_BASELINE_PATH" 2>/dev/null || true)"
+  staged_count="$(printf '%s\n' "$staged_record" | awk 'NF {n++} END {print n+0}')"
+  staged_mode="$(printf '%s\n' "$staged_record" | awk 'NR == 1 {print $1}')"
+  if [ "$staged_count" -ne 1 ] || [ "$staged_mode" != "100644" ]; then
+    log "BLOCKED: fixture hash mismatch path=$FIXTURE_BASELINE_PATH expected=$FIXTURE_BASELINE_SHA256 actual=<staged-missing-or-nonregular>"
+    return 1
+  fi
+
+  worktree_sha="$(shasum -a 256 "$candidate" | awk '{print $1}')"
+  if [ "$worktree_sha" != "$FIXTURE_BASELINE_SHA256" ]; then
+    log "BLOCKED: fixture hash mismatch path=$FIXTURE_BASELINE_PATH expected=$FIXTURE_BASELINE_SHA256 actual=$worktree_sha"
+    return 1
+  fi
+
+  staged_sha="$(git -C "$repo" show ":$FIXTURE_BASELINE_PATH" 2>/dev/null | shasum -a 256 | awk '{print $1}')"
+  if [ "$staged_sha" != "$FIXTURE_BASELINE_SHA256" ]; then
+    log "BLOCKED: fixture hash mismatch path=$FIXTURE_BASELINE_PATH expected=$FIXTURE_BASELINE_SHA256 actual=$staged_sha"
+    return 1
+  fi
+  return 0
+}
+
+run_attempt() {
+  local attempt="$1"
+  local observed_sha="$2"
+  local repo file_count deletion_count tracked_count deletion_percent current_sha
+
+  CURRENT_STAGE="$(mktemp -d "$STATE/stage.XXXXXX")"
+  repo="$CURRENT_STAGE/repo"
+
+  if [ "$MODE" = "local-rehearsal" ]; then
+    if ! GIT_ALLOW_PROTOCOL=file git -c protocol.file.allow=always clone --quiet --no-local \
+      "$BASELINE_ROOT/$observed_sha.git" "$repo" >>"$LOG" 2>&1; then
+      log "local baseline clone failed on attempt $attempt"
+      return 20
+    fi
+  else
+    if ! git clone --quiet --depth 1 --single-branch --branch "$BRANCH" "$REMOTE" "$repo" >>"$LOG" 2>&1; then
+      log "clone failed on attempt $attempt"
+      return 20
+    fi
+    if [ "$(git -C "$repo" remote get-url origin)" != "$REMOTE" ]; then
+      log "BLOCKED: cloned origin URL mismatch"
+      return 21
+    fi
+  fi
+  if [ "$(git -C "$repo" rev-parse HEAD)" != "$observed_sha" ]; then
+    log "remote moved before clone completed"
+    return 75
+  fi
+
+  if ! copy_control_files "$repo"; then
+    log "BLOCKED: control-file copy failed"
+    return 22
+  fi
+  if [ "$MODE" = "production" ]; then
+    unclassified_file="$PRODUCTION_STATE/unclassified.txt"
+  else
+    unclassified_file="$STATE/unclassified.txt"
+  fi
+  if ! PERSONAL_REPO_UNCLASSIFIED_FILE="$unclassified_file" \
+    "$repo/scripts/sync-from-machine.sh" >>"$LOG" 2>&1; then
+    log "BLOCKED: source snapshot script failed"
+    return 23
+  fi
+  mkdir -p "$repo/automation/local-bin"
+  cp -p "$0" "$repo/automation/local-bin/personal-repo-sync" || return 24
+
+  git -C "$repo" add -A
+
+  if ! log_allowlists "$repo"; then
+    return 25
+  fi
+  if ! check_sensitive_paths "$repo"; then
+    return 26
+  fi
+
+  deletion_count="$(git -C "$repo" diff --cached --name-status | awk '$1 ~ /^D/ {n++} END {print n+0}')"
+  tracked_count="$(git -C "$repo" ls-tree -r --name-only HEAD | wc -l | tr -d ' ')"
+  deletion_percent=0
+  if [ "$tracked_count" -gt 0 ]; then
+    deletion_percent=$((deletion_count * 100 / tracked_count))
+  fi
+  if [ "$ALLOW_LARGE_DELETIONS" -ne 1 ] &&
+     { [ "$deletion_count" -gt "$MAX_DELETIONS" ] ||
+       [ "$deletion_percent" -gt "$MAX_DELETION_PERCENT" ]; }; then
+    log "BLOCKED: deletion circuit breaker count=$deletion_count percent=$deletion_percent"
+    printf 'deletion_circuit_breaker: %s deletion(s), %s%% of prior snapshot\n' \
+      "$deletion_count" "$deletion_percent"
+    git -C "$repo" diff --cached --diff-filter=D --name-only | sed -n '1,200p'
+    return 27
+  fi
+
+  if ! fixture_baseline_valid "$repo"; then
+    return 28
+  fi
+
+  if ! gitleaks git --staged --redact --no-banner --verbose \
+    --gitleaks-ignore-path "$repo/.gitleaksignore" "$repo" >>"$LOG" 2>&1; then
+    log "BLOCKED: gitleaks rejected staged snapshot"
+    return 28
+  fi
+
+  if [ "$MODE" = "local-rehearsal" ]; then
+    production_status_after="$(shasum -a 256 "$PRODUCTION_STATUS" 2>/dev/null | awk '{print $1}')"
+    production_state_after="$(production_manifest_hash)"
+    if [ -z "$production_status_before" ] || [ "$production_status_before" != "$production_status_after" ] ||
+       [ -z "$production_state_before" ] || [ "$production_state_before" != "$production_state_after" ]; then
+      log "BLOCKED: production state changed during coordinated local rehearsal"
+      return 33
+    fi
+  fi
+
+  file_count="$(git -C "$repo" diff --cached --name-only | wc -l | tr -d ' ')"
+  if git -C "$repo" diff --cached --quiet; then
+    if [ "$DRY_RUN" -eq 1 ]; then
+      if [ "$MODE" = "local-rehearsal" ]; then
+        write_status "verified" "local rehearsal found no source changes" "$observed_sha" "$(date +%s)"
+        echo "local-rehearsal: no source changes; production-status-sha256=$production_status_after; production-state-sha256=$production_state_after"
+      else
+        write_status "verified" "remote dry run found no source changes" "$observed_sha" "$(date +%s)"
+        echo "dry-run: no source changes"
+      fi
+      cleanup_stage
+      return 11
+    fi
+    if ! cache_baseline "$repo" "$observed_sha"; then
+      write_status "failed" "verified remote but baseline cache refresh failed" "$observed_sha" "$(date +%s)"
+      return 32
+    fi
+    write_status "verified" "no source changes" "$observed_sha" "$(date +%s)"
+    cleanup_stage
+    return 10
+  fi
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    if [ "$MODE" = "local-rehearsal" ]; then
+      write_status "verified" "local rehearsal passed: $file_count changed path(s), $deletion_count deletion(s)" "$observed_sha" "$(date +%s)"
+      printf 'local-rehearsal: %s changed path(s), %s deletion(s); production-status-sha256=%s; production-state-sha256=%s\n' \
+        "$file_count" "$deletion_count" "$production_status_after" "$production_state_after"
+      git -C "$repo" diff --cached --name-status
+    else
+      write_status "verified" "remote dry run passed: $file_count changed path(s), $deletion_count deletion(s)" "$observed_sha" "$(date +%s)"
+      printf 'dry-run: %s changed path(s), %s deletion(s)\n' "$file_count" "$deletion_count"
+      git -C "$repo" diff --cached --stat
+    fi
+    cleanup_stage
+    return 11
+  fi
+
+  git -C "$repo" config user.name "${PERSONAL_REPO_AUTHOR_NAME:-Your Name}"
+  git -C "$repo" config user.email "${PERSONAL_REPO_AUTHOR_EMAIL:-you@example.com}"
+  if ! git -C "$repo" commit -q -m "Archive source snapshot $(date +%Y-%m-%d) ($file_count paths)" >>"$LOG" 2>&1; then
+    log "commit failed"
+    return 29
+  fi
+
+  current_sha="$(git ls-remote "$REMOTE" "refs/heads/$BRANCH" 2>/dev/null | awk 'NR==1 {print $1}')"
+  if [ "$current_sha" != "$observed_sha" ]; then
+    log "remote moved before push"
+    return 75
+  fi
+
+  if ! git -C "$repo" push --quiet origin "HEAD:$BRANCH" >>"$LOG" 2>&1; then
+    current_sha="$(git ls-remote "$REMOTE" "refs/heads/$BRANCH" 2>/dev/null | awk 'NR==1 {print $1}')"
+    if [ "$current_sha" != "$observed_sha" ]; then
+      log "push lost a remote race"
+      return 75
+    fi
+    log "push failed without remote movement"
+    return 30
+  fi
+
+  local_sha="$(git -C "$repo" rev-parse HEAD)"
+  current_sha="$(git ls-remote "$REMOTE" "refs/heads/$BRANCH" 2>/dev/null | awk 'NR==1 {print $1}')"
+  if [ "$current_sha" != "$local_sha" ]; then
+    log "BLOCKED: post-push SHA verification mismatch"
+    return 31
+  fi
+
+  if ! cache_baseline "$repo" "$local_sha"; then
+    write_status "failed" "push verified but baseline cache refresh failed" "$local_sha" "$(date +%s)"
+    return 32
+  fi
+
+  write_status "verified" "pushed $file_count changed path(s)" "$local_sha" "$(date +%s)"
+  log "pushed commit $local_sha ($file_count changed path(s))"
+  printf 'pushed: %s (%s changed path(s))\n' "$local_sha" "$file_count"
+  cleanup_stage
+  return 0
+}
+
+attempt=1
+while [ "$attempt" -le 2 ]; do
+  run_attempt "$attempt" "$remote_sha"
+  rc=$?
+  case "$rc" in
+    0|10|11) exit 0 ;;
+    75)
+      cleanup_stage
+      if [ "$attempt" -eq 1 ] && [ "$DRY_RUN" -eq 0 ]; then
+        remote_sha="$(git ls-remote "$REMOTE" "refs/heads/$BRANCH" 2>/dev/null | awk 'NR==1 {print $1}')"
+        if [[ ! "$remote_sha" =~ ^[0-9a-f]{40}$ ]]; then
+          write_status "failed" "remote race retry could not resolve main"
+          exit 1
+        fi
+        log "retrying once after concurrent remote movement"
+        attempt=$((attempt + 1))
+        continue
+      fi
+      ;;
+  esac
+  write_status "failed" "snapshot attempt failed with code $rc"
+  exit 1
+done
+
+write_status "failed" "snapshot retry exhausted"
+exit 1

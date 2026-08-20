@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "jobs": [
+    {"label":"com.ivo.notebooklm-auth-refresh","moduleID":"systems.notebooklm","executable":"Modules/systems.notebooklm/bin/auth_keepalive.sh","arguments":[],"schedule":{"kind":"daily","hour":4,"minute":0}},
+    {"label":"com.ivo.notebooklm-sync","moduleID":"systems.notebooklm","executable":"Modules/systems.notebooklm/bin/sync_all.sh","arguments":[],"schedule":{"kind":"interval","seconds":3600,"runAtLoad":true}},
+    {"label":"com.ivogundlach.app-repo-sync","moduleID":"systems.repository-release","executable":"Modules/systems.repository-release/bin/app-repo-sync","arguments":[],"schedule":{"kind":"dailyTimes","times":["12:30","22:30"]}},
+    {"label":"com.ivogundlach.apple-mail-draft-runner","moduleID":"mail.assistant","executable":"Helpers/MailAssistant.app/Contents/MacOS/mail-assistant-runner","arguments":["--once"],"schedule":{"kind":"hourlyWindow","minute":0,"startHour":8,"endHour":22}},
+    {"label":"com.ivogundlach.codex-mirror-sync","moduleID":"systems.codex-improvement","executable":"Modules/systems.codex-improvement/bin/codex-mirror-sync","arguments":[],"schedule":{"kind":"daily","hour":4,"minute":0}},
+    {"label":"com.ivogundlach.memory-corpus-backup","moduleID":"systems.memory","executable":"Modules/systems.memory/bin/memory-corpus-backup","arguments":[],"schedule":{"kind":"daily","hour":4,"minute":0}},
+    {"label":"com.ivogundlach.memory-health-weekly","moduleID":"systems.memory","executable":"Modules/systems.memory/bin/memory-health-weekly","arguments":[],"schedule":{"kind":"weekly","weekday":1,"hour":18,"minute":15}},
+    {"label":"com.ivogundlach.memory.semantic-index","moduleID":"systems.memory","executable":"Modules/systems.memory/bin/semantic-index-retry","arguments":["--semantic-only"],"schedule":{"kind":"daily","hour":4,"minute":0}},
+    {"label":"com.ivogundlach.personal-repo-sync","moduleID":"systems.repository-release","executable":"Modules/systems.repository-release/bin/personal-repo-sync","arguments":[],"schedule":{"kind":"daily","hour":4,"minute":0}},
+    {"label":"com.ivogundlach.quit-on-close","moduleID":"desktop.quit-on-close","executable":"Helpers/quit-on-close","arguments":[],"schedule":{"kind":"continuous"}},
+    {"label":"com.ivogundlach.transcript-distill","moduleID":"systems.memory","executable":"Modules/systems.memory/bin/memory-transcript-distill","arguments":[],"schedule":{"kind":"daily","hour":4,"minute":0}},
+    {"label":"com.ivogundlach.weekly-system-improvement","moduleID":"systems.codex-improvement","executable":"Modules/systems.codex-improvement/bin/weekly-system-improvement","arguments":["--scheduled"],"schedule":{"kind":"interval","seconds":21600,"runAtLoad":true,"weeklyAlso":{"weekday":1,"hour":19,"minute":0}}},
+    {"label":"com.user.smartwake","moduleID":"desktop.smart-wake","executable":"Modules/desktop.smart-wake/bin/smart-wake.sh","arguments":[],"schedule":{"kind":"continuous"}},
+    {"label":"cron:backup-coverage-audit","moduleID":"systems.backup-audit","executable":"Modules/systems.backup-audit/bin/backup-coverage-audit","arguments":[],"schedule":{"kind":"daily","hour":4,"minute":0}}
+  ]
+}

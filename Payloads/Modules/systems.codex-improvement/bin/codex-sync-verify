@@ -1,0 +1,242 @@
+#!/usr/bin/env bash
+# codex-sync-verify — check that the generated mirrors match canonical ~/.codex.
+#
+# Canonical write path is ~/.codex (AGENTS.md + skills/). codex-mirror-sync
+# one-way mirrors it into the Gemini / Antigravity / OpenCode / Command Code copies. This script
+# reports whether each mirror is in sync. It REPLICATES the sync transforms so it
+# never false-positives:
+#   * AGENTS.md mirrors = a sync-header line + the de-headered source (emit_with_header).
+#     Targets: ~/.gemini/config/AGENTS.md, ~/.antigravitycli/AGENTS.md,
+#     ~/.config/opencode/AGENTS.md, and ~/.commandcode/AGENTS.md.
+#   * User-root AGENTS.md must be absent to prevent duplicate loading.
+#   * skill mirrors     = rsync of each SKILL.md folder, category folders flattened
+#                         to a sanitized <skill-name>, same excludes as the sync.
+# Read-only: never writes. Exit 0 = all in sync, 1 = drift found.
+#
+# Usage:
+#   codex-sync-verify        # summary
+#   codex-sync-verify -v     # also print the offending files / rsync items
+#   codex-sync-verify --policy-only [-v]  # check canonical skill orchestration policy only
+set -euo pipefail
+
+VERBOSE=0
+POLICY_ONLY=0
+usage() {
+  printf 'usage: codex-sync-verify [-v|--verbose] [--policy-only]\n' >&2
+}
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    -v|--verbose) VERBOSE=1 ;;
+    --policy-only) POLICY_ONLY=1 ;;
+    *) usage; exit 2 ;;
+  esac
+  shift
+done
+
+HOME_DIR="${HOME:-$(cd && pwd -P)}"
+CODEX_HOME="${CODEX_HOME:-$HOME_DIR/.codex}"
+GEMINI_HOME="${GEMINI_HOME:-$HOME_DIR/.gemini}"
+ANTIGRAVITY_CLI_HOME="${ANTIGRAVITY_CLI_HOME:-$HOME_DIR/.antigravitycli}"
+OPENCODE_HOME="${OPENCODE_HOME:-${XDG_CONFIG_HOME:-$HOME_DIR/.config}/opencode}"
+COMMANDCODE_HOME="${COMMANDCODE_HOME:-$HOME_DIR/.commandcode}"
+MANAGED_MARKER=".codex-sync-managed"
+SKILLS_ROOT="$CODEX_HOME/skills"
+
+drift=0
+
+note()  { printf '  %s\n' "$*"; }
+ok()    { printf 'OK    %s\n' "$*"; }
+bad()   { printf 'DRIFT %s\n' "$*"; drift=1; }
+
+check_skill_orchestration_policy() {
+  local forbidden_re matches scan_rc path entry
+  local -a scan_paths=()
+  forbidden_re='sub[- ]?agents?|child[- ]?agents?|subagent_type|max_concurrent_subagents|background agents?|parallel agents?|delegated/reviewer assignments|another agent delegates'
+
+  echo "== skill orchestration policy =="
+  if [[ ! -d "$SKILLS_ROOT" ]]; then
+    bad "$SKILLS_ROOT (canonical skills directory missing)"
+    return
+  fi
+  if ! command -v rg >/dev/null 2>&1; then
+    bad "rg missing (cannot enforce canonical skill orchestration policy)"
+    return
+  fi
+
+  while IFS= read -r -d '' entry; do
+    scan_paths+=("$entry")
+  done < <(find "$SKILLS_ROOT" -mindepth 1 -maxdepth 1 ! -name '.system' -print0)
+
+  if [[ "${#scan_paths[@]}" == 0 ]]; then
+    ok "$SKILLS_ROOT (no user-owned skills to scan; app-managed .system excluded)"
+  elif matches="$(rg --hidden -n -i --glob '!**/.DS_Store' "$forbidden_re" "${scan_paths[@]}")"; then
+    bad "$SKILLS_ROOT (user-owned skill orchestration must live only in canonical AGENTS.md)"
+    while IFS= read -r path; do
+      [[ -n "$path" ]] && note "$path"
+    done < <(printf '%s\n' "$matches" | cut -d: -f1 | sort -u)
+    if [[ "$VERBOSE" == 1 ]]; then
+      printf '%s\n' "$matches" | sed 's/^/    /'
+    fi
+  else
+    scan_rc=$?
+    if [[ "$scan_rc" == 1 ]]; then
+      ok "$SKILLS_ROOT (no user-owned skill orchestration; app-managed .system excluded)"
+    else
+      bad "$SKILLS_ROOT (policy scan failed with exit $scan_rc)"
+    fi
+  fi
+}
+
+if [[ "$POLICY_ONLY" == 1 ]]; then
+  check_skill_orchestration_policy
+  echo
+  if [[ "$drift" == 0 ]]; then
+    echo "codex-sync-verify: skill orchestration policy clean"
+  else
+    echo "codex-sync-verify: skill orchestration policy violation"
+  fi
+  exit "$drift"
+fi
+
+normalize_opencode_home() {
+  local input="$1"
+  local parent base resolved_parent
+  if [[ -L "$input" ]]; then
+    printf 'codex-sync-verify: refusing symlink OPENCODE_HOME: %s\n' "$input" >&2
+    return 1
+  fi
+  if [[ -e "$input" ]]; then
+    realpath "$input"
+    return
+  fi
+  parent="$(dirname "$input")"
+  base="$(basename "$input")"
+  if [[ "$base" == "." || "$base" == ".." || ! -d "$parent" ]]; then
+    printf 'codex-sync-verify: cannot safely resolve OPENCODE_HOME: %s\n' "$input" >&2
+    return 1
+  fi
+  resolved_parent="$(cd "$parent" && pwd -P)"
+  printf '%s/%s\n' "$resolved_parent" "$base"
+}
+
+case "$OPENCODE_HOME" in
+  /*) ;;
+  *) printf 'codex-sync-verify: unsafe OPENCODE_HOME (must be absolute): %s\n' "$OPENCODE_HOME" >&2; exit 1 ;;
+esac
+OPENCODE_HOME="$(normalize_opencode_home "$OPENCODE_HOME")"
+if [[ "$OPENCODE_HOME" == "/" || "$OPENCODE_HOME" == "$HOME_DIR" || "$OPENCODE_HOME" == "${XDG_CONFIG_HOME:-$HOME_DIR/.config}" ]]; then
+  printf 'codex-sync-verify: unsafe OPENCODE_HOME: %s\n' "$OPENCODE_HOME" >&2
+  exit 1
+fi
+
+# --- AGENTS.md mirrors; user-root duplicates must stay absent ---------------
+# Replicate emit_with_header: header line + blank, then source minus any prior
+# sync-header lines, with leading blank lines trimmed.
+emit_with_header() {
+  local source="$1"
+  printf '<!-- Synced from %s by codex-mirror-sync. Edit the Codex source, not this generated file. -->\n\n' "$source"
+  grep -v 'by codex-mirror-sync\. Edit the Codex source' "$source" | sed '/./,$!d'
+}
+
+AGENTS_SRC="$CODEX_HOME/AGENTS.md"
+check_skill_orchestration_policy
+echo "== AGENTS.md =="
+if [[ -f "$AGENTS_SRC" ]]; then
+  expected="$(mktemp)"; trap 'rm -f "$expected"' EXIT
+  emit_with_header "$AGENTS_SRC" > "$expected"
+  for legacy_target in \
+    "$HOME_DIR/AGENTS.md" ; do
+    if [[ -e "$legacy_target" || -L "$legacy_target" ]]; then
+      bad "$legacy_target (must be absent; user-root instructions duplicate global guidance)"
+    else
+      ok "$legacy_target (absent)"
+    fi
+  done
+  for target in \
+    "$GEMINI_HOME/config/AGENTS.md" \
+    "$ANTIGRAVITY_CLI_HOME/AGENTS.md" \
+    "$OPENCODE_HOME/AGENTS.md" \
+    "$COMMANDCODE_HOME/AGENTS.md" ; do
+    if [[ ! -e "$target" ]]; then
+      bad "$target (missing)"
+    elif cmp -s "$expected" "$target"; then
+      ok "$target"
+    else
+      bad "$target (content differs)"
+      [[ "$VERBOSE" == 1 ]] && diff -u "$target" "$expected" | sed 's/^/    /' | head -40
+    fi
+  done
+else
+  bad "$AGENTS_SRC (canonical source missing)"
+fi
+
+# --- skills/**/SKILL.md -> mirror trees -------------------------------------
+skill_name_for_path() {  # mirrors the sync's sanitizer
+  basename "$(dirname "$1")" \
+    | tr '[:upper:]' '[:lower:]' \
+    | sed -E 's/[^a-z0-9._-]+/-/g; s/^-+//; s/-+$//'
+}
+
+echo "== skills =="
+if [[ -d "$SKILLS_ROOT" ]]; then
+  while IFS= read -r -d '' skill_md; do
+    name="$(skill_name_for_path "$skill_md")"
+    [[ -n "$name" ]] || continue
+    src_dir="$(dirname "$skill_md")"
+    for target_dir in \
+      "$GEMINI_HOME/config/plugins/custom-skills/skills/$name" \
+      "$OPENCODE_HOME/skills/$name" \
+      "$COMMANDCODE_HOME/skills/$name" ; do
+      if [[ ! -d "$target_dir" ]]; then
+        bad "skill '$name' -> $target_dir (missing)"
+        continue
+      fi
+      if [[ "$target_dir" == "$OPENCODE_HOME/skills/"* || "$target_dir" == "$COMMANDCODE_HOME/skills/"* ]] && [[ ! -f "$target_dir/$MANAGED_MARKER" ]]; then
+        bad "skill '$name' -> $target_dir (missing sync ownership marker)"
+        continue
+      fi
+      # Dry-run, checksum-based, same excludes/--delete as the sync. Keep only
+      # content/new/deleted items (drop attr-only '.'-prefixed itemize lines).
+      items="$(rsync -a -ni -c --delete \
+                 --exclude '.DS_Store' --exclude '.memory' \
+                 --exclude '.git' --exclude '.mcp.json' \
+                 --exclude "$MANAGED_MARKER" \
+                 "$src_dir/" "$target_dir/" 2>/dev/null \
+               | grep -vE '^\.' || true)"
+      if [[ -z "$items" ]]; then
+        ok "skill '$name'"
+      else
+        bad "skill '$name' -> $target_dir"
+        [[ "$VERBOSE" == 1 ]] && printf '%s\n' "$items" | sed 's/^/    /'
+      fi
+    done
+  done < <(find "$SKILLS_ROOT" -type f -name SKILL.md -print0 | sort -z)
+
+  expected_names="$(mktemp)"
+  while IFS= read -r -d '' skill_md; do
+    skill_name_for_path "$skill_md"
+    printf '\n'
+  done < <(find "$SKILLS_ROOT" -type f -name SKILL.md -print0 | sort -z) | sort -u > "$expected_names"
+  for skills_root in "$OPENCODE_HOME/skills" "$COMMANDCODE_HOME/skills"; do
+    for target_dir in "$skills_root"/*/; do
+      [[ -d "$target_dir" ]] || continue
+      [[ -f "$target_dir/$MANAGED_MARKER" ]] || continue
+      name="$(basename "$target_dir")"
+      if ! grep -qxF -- "$name" "$expected_names"; then
+        bad "orphan generated skill '$name' in $skills_root"
+      fi
+    done
+  done
+  rm -f "$expected_names"
+else
+  bad "$SKILLS_ROOT (canonical skills dir missing)"
+fi
+
+echo
+if [[ "$drift" == 0 ]]; then
+  echo "codex-sync-verify: all mirrors in sync"
+else
+  echo "codex-sync-verify: DRIFT found — run codex-mirror-sync to propagate"
+  echo "  (if a mirror was hand-edited, that edit will be overwritten — move it to ~/.codex first)"
+fi
+exit "$drift"

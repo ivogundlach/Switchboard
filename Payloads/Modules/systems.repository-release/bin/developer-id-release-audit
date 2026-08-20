@@ -1,0 +1,351 @@
+#!/usr/bin/env python3
+"""Audit an exact public macOS DMG without launching or installing its app."""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import hashlib
+import json
+import os
+import plistlib
+import re
+import stat
+import subprocess
+import sys
+import tarfile
+import tempfile
+import zipfile
+from pathlib import Path
+
+
+PERSONAL_PATTERNS = (
+    b"/Users/example",
+    b"person@example.com",
+    b"github.com/example-owner/private-source-archive",
+    b"/.memory/",
+)
+BLOCKED_NAMES = re.compile(
+    r"(^|/)(browser_profile|\.memory)(/|$)|"
+    r"(^|/)(storage_state|state)\.json$|"
+    r"(^|/).*(cookie|token|webhook-url).*$|"
+    r"\.(log|ndjson)$",
+    re.IGNORECASE,
+)
+ALLOWED_GITLEAKS = {
+    (
+        "generic-api-key",
+        "resources/accessibility/reading_mode_gdocs_helper_manifest.json",
+    ),
+}
+
+
+def fail(message: str) -> "NoReturn":
+    print(f"developer-id-release-audit: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def run(command: list[str], *, capture: bool = False, check: bool = True) -> subprocess.CompletedProcess[bytes]:
+    result = subprocess.run(command, capture_output=capture)
+    if check and result.returncode:
+        detail = (result.stdout or b"") + (result.stderr or b"")
+        fail(f"command failed ({command[0]}):\n{detail.decode(errors='replace').strip()}")
+    return result
+
+
+def executable_metadata(path: Path) -> tuple[list[str], list[str]]:
+    file_result = run(["file", "-b", str(path)], capture=True)
+    if b"Mach-O" not in file_result.stdout:
+        return [], []
+    archs = run(["lipo", "-archs", str(path)], capture=True).stdout.decode().strip().split()
+    # `otool-classic` treats parentheses in a normal filename as archive-member
+    # syntax and truncates Chromium helper paths. `vtool` accepts those paths.
+    load_commands = run(
+        ["xcrun", "vtool", "-show-build", str(path)], capture=True
+    ).stdout.decode(errors="replace")
+    minimums = re.findall(r"\bminos\s+([0-9.]+)", load_commands)
+    return archs, minimums
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def xattr_names(path: Path) -> list[str]:
+    result = run(["xattr", str(path)], capture=True, check=False)
+    if result.returncode:
+        return []
+    return sorted(line for line in result.stdout.decode(errors="replace").splitlines() if line)
+
+
+def signature_metadata(path: Path) -> dict[str, object]:
+    details = run(["codesign", "-d", "--verbose=4", "--requirements", "-", str(path)], capture=True)
+    text = ((details.stdout or b"") + (details.stderr or b"")).decode(errors="replace")
+    fields: dict[str, object] = {}
+    for key in ("Identifier", "TeamIdentifier", "Authority", "Timestamp", "Runtime Version"):
+        values = re.findall(rf"^{re.escape(key)}=(.*)$", text, re.MULTILINE)
+        if values:
+            fields[key.lower().replace(" ", "_")] = values if key == "Authority" else values[-1]
+    requirement = re.search(r"^designated => (.*)$", text, re.MULTILINE)
+    if requirement:
+        fields["designated_requirement"] = requirement.group(1)
+    entitlement_result = run(
+        ["codesign", "-d", "--entitlements", ":-", str(path)], capture=True, check=False
+    )
+    entitlement_bytes = entitlement_result.stdout or b""
+    if entitlement_bytes.startswith(b"<?xml") or entitlement_bytes.startswith(b"bplist"):
+        try:
+            fields["entitlements"] = plistlib.loads(entitlement_bytes)
+        except plistlib.InvalidFileException:
+            fields["entitlements_parse_error"] = True
+    else:
+        fields["entitlements"] = {}
+    return fields
+
+
+def embedded_archive_inventory(path: Path, pyi_viewer: Path | None) -> dict[str, object] | None:
+    if zipfile.is_zipfile(path):
+        with zipfile.ZipFile(path) as archive:
+            return {
+                "path": str(path),
+                "format": "zip",
+                "members": [
+                    {
+                        "name": item.filename,
+                        "compressed_size": item.compress_size,
+                        "uncompressed_size": item.file_size,
+                        "crc32": f"{item.CRC:08x}",
+                    }
+                    for item in archive.infolist()
+                ],
+            }
+    try:
+        if tarfile.is_tarfile(path):
+            with tarfile.open(path) as archive:
+                return {
+                    "path": str(path),
+                    "format": "tar",
+                    "members": [
+                        {"name": item.name, "size": item.size, "type": item.type.decode(errors="replace")}
+                        for item in archive.getmembers()
+                    ],
+                }
+    except (OSError, tarfile.TarError):
+        pass
+    if pyi_viewer is not None:
+        result = run([str(pyi_viewer), "-l", str(path)], capture=True, check=False)
+        if result.returncode == 0:
+            lines = result.stdout.decode(errors="replace").splitlines()
+            return {"path": str(path), "format": "pyinstaller", "members": lines}
+    return None
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Verify signatures, notarization, Gatekeeper, architecture, privacy, and image integrity."
+    )
+    parser.add_argument("--dmg", required=True, type=Path, help="DMG to audit")
+    parser.add_argument("--max-macos", default="26.99", help="Reject executables requiring a newer macOS")
+    parser.add_argument("--report", type=Path, help="Write the complete machine-readable audit record here")
+    parser.add_argument(
+        "--pyi-archive-viewer", type=Path, help="Optional PyInstaller archive viewer for appended archives"
+    )
+    args = parser.parse_args()
+    dmg = args.dmg.expanduser().resolve()
+    if not dmg.is_file() or dmg.suffix.lower() != ".dmg":
+        fail(f"DMG not found: {dmg}")
+
+    run(["hdiutil", "verify", str(dmg)])
+    attached = run(
+        ["diskutil", "image", "attach", "--readOnly", "--nobrowse", "--plist", str(dmg)],
+        capture=True,
+    )
+    payload = plistlib.loads(attached.stdout)
+    mounted = [item for item in payload.get("system-entities", []) if item.get("mount-point")]
+    if len(mounted) != 1:
+        fail(f"expected one mounted volume, found {len(mounted)}")
+    mount = Path(mounted[0]["mount-point"])
+    device = str(mounted[0]["dev-entry"])
+
+    try:
+        apps = sorted(path for path in mount.glob("*.app") if path.is_dir())
+        if len(apps) != 1:
+            fail(f"expected one top-level app, found {len(apps)}")
+        app = apps[0]
+        symlinks = []
+        for path in mount.rglob("*"):
+            if path.is_symlink():
+                target = os.readlink(path)
+                symlinks.append((str(path.relative_to(mount)), target))
+                if path == mount / "Applications" and target == "/Applications":
+                    continue
+                if os.path.isabs(target):
+                    fail(f"unexpected absolute symlink: {path.relative_to(mount)} -> {target}")
+                try:
+                    resolved = path.resolve(strict=True)
+                except (OSError, RuntimeError):
+                    fail(f"broken or cyclic symlink: {path.relative_to(mount)} -> {target}")
+                mount_root = mount.resolve()
+                if resolved != mount_root and mount_root not in resolved.parents:
+                    fail(f"symlink escapes disk image: {path.relative_to(mount)} -> {target}")
+
+        blocked: list[str] = []
+        personal: list[str] = []
+        executable_rows: list[dict[str, object]] = []
+        file_rows: list[dict[str, object]] = []
+        archive_rows: list[dict[str, object]] = []
+        code_bundles: list[str] = []
+        for path in mount.rglob("*"):
+            relative = str(path.relative_to(mount))
+            if path.is_dir() and path.suffix.lower() in (".app", ".framework", ".xpc", ".appex", ".bundle"):
+                code_bundles.append(relative)
+            if path.is_symlink() or not path.is_file():
+                continue
+            if BLOCKED_NAMES.search(relative) and "/Licenses/" not in f"/{relative}":
+                blocked.append(relative)
+            data = path.read_bytes()
+            if any(pattern.lower() in data.lower() for pattern in PERSONAL_PATTERNS):
+                personal.append(relative)
+            item_stat = path.stat()
+            row: dict[str, object] = {
+                "path": relative,
+                "size": item_stat.st_size,
+                "mode": stat.filemode(item_stat.st_mode),
+                "sha256": hashlib.sha256(data).hexdigest(),
+                "xattrs": xattr_names(path),
+            }
+            archs, minimums = executable_metadata(path)
+            if archs:
+                for minimum in minimums:
+                    if tuple(map(int, minimum.split("."))) > tuple(map(int, args.max_macos.split("."))):
+                        fail(f"{relative} requires macOS {minimum}, above {args.max_macos}")
+                executable = {
+                    "path": relative,
+                    "architectures": archs,
+                    "minimums": minimums,
+                }
+                executable_rows.append(executable)
+                row["mach_o"] = executable
+            archive = embedded_archive_inventory(path, args.pyi_archive_viewer)
+            if archive is not None:
+                archive["path"] = relative
+                archive_rows.append(archive)
+            file_rows.append(row)
+        if blocked:
+            fail("blocked private/runtime files found: " + ", ".join(blocked))
+        if personal:
+            fail("personal strings found in: " + ", ".join(personal))
+
+        for executable in executable_rows:
+            executable_path = mount / str(executable["path"])
+            run(["codesign", "--verify", "--strict", "--verbose=2", str(executable_path)])
+            executable["signature"] = signature_metadata(executable_path)
+
+        with tempfile.NamedTemporaryFile(suffix=".json") as report:
+            result = run(
+                [
+                    "gitleaks",
+                    "dir",
+                    str(mount),
+                    "--no-banner",
+                    "--redact",
+                    "--report-format",
+                    "json",
+                    "--report-path",
+                    report.name,
+                ],
+                capture=True,
+                check=False,
+            )
+            findings = json.loads(Path(report.name).read_text())
+            if result.returncode not in (0, 1):
+                fail("gitleaks could not complete the mounted-DMG scan")
+            allowed_gitleaks: list[dict[str, object]] = []
+            unexpected_gitleaks: list[dict[str, object]] = []
+            for finding in findings:
+                finding_path = str(finding.get("File", ""))
+                key = (str(finding.get("RuleID", "")), finding_path.rsplit("playwright-browsers/", 1)[-1])
+                if any(key[0] == rule and key[1].endswith(suffix) for rule, suffix in ALLOWED_GITLEAKS):
+                    allowed_gitleaks.append({"rule": key[0], "path": finding_path})
+                else:
+                    unexpected_gitleaks.append(finding)
+            if unexpected_gitleaks:
+                fail("gitleaks found potential secrets in the mounted DMG")
+
+        run(["codesign", "--verify", "--deep", "--strict", "--verbose=2", str(app)])
+        run(["xcrun", "stapler", "validate", str(app)])
+        run(["spctl", "-a", "-vv", "-t", "exec", str(app)])
+
+        digest = sha256(dmg)
+        license_rows = [
+            {"path": row["path"], "sha256": row["sha256"]}
+            for row in file_rows
+            if re.search(r"(^|/)(licenses?|notices?)(/|$)|(^|/)(copying|license|notice)(\.|$)", str(row["path"]), re.I)
+        ]
+        audit = {
+            "schema": 1,
+            "audited_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+            "dmg": {
+                "path": str(dmg),
+                "sha256": digest,
+                "size": dmg.stat().st_size,
+                "xattrs": xattr_names(dmg),
+                "image_verified": True,
+            },
+            "app": {
+                "name": app.name,
+                "codesign_verified": True,
+                "stapler_verified": True,
+                "gatekeeper_accepted": True,
+                "code_bundles": sorted(code_bundles),
+            },
+            "files": sorted(file_rows, key=lambda row: str(row["path"])),
+            "executables": executable_rows,
+            "embedded_archives": archive_rows,
+            "licenses": license_rows,
+            "symlinks": [{"path": path, "target": target} for path, target in symlinks],
+            "privacy": {
+                "gitleaks_findings": 0,
+                "allowed_browser_findings": allowed_gitleaks,
+                "personal_pattern_hits": [],
+                "blocked_files": [],
+            },
+            "limits": {"maximum_macos": args.max_macos},
+        }
+        if args.report:
+            report_path = args.report.expanduser().resolve()
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_path.write_text(json.dumps(audit, indent=2, sort_keys=True) + "\n")
+        print(f"DMG={dmg}")
+        print(f"SHA256={digest}")
+        print(f"APP={app.name}")
+        print(f"EXECUTABLES={len(executable_rows)}")
+        for row in executable_rows:
+            print(
+                "EXEC="
+                + row["path"]
+                + " ARCH="
+                + ",".join(row["architectures"])
+                + " MINOS="
+                + ",".join(row["minimums"])
+            )
+        print("GITLEAKS_FINDINGS=0")
+        print(f"GITLEAKS_ALLOWED_BROWSER_FINDINGS={len(allowed_gitleaks)}")
+        print("PERSONAL_PATH_HITS=0")
+        print(f"SYMLINKS={len(symlinks)}")
+        print(f"FILES={len(file_rows)}")
+        print(f"LICENSE_FILES={len(license_rows)}")
+        print(f"EMBEDDED_ARCHIVES={len(archive_rows)}")
+        if args.report:
+            print(f"REPORT={report_path}")
+    finally:
+        run(["diskutil", "eject", device], check=False)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

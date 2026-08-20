@@ -1,0 +1,10 @@
+.DS_Store
+.memory/
+.build/
+build/
+DerivedData/
+*.dmg
+*.zip
+Icon/AppIcon-1024.png
+Icon/AppIcon.icns
+Icon/AppIcon.iconset/

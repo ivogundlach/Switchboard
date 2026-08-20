@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "componentID": "desktop.warm-corners",
+  "pilot": true,
+  "legacy": {
+    "bundleID": "com.ivogundlach.WarmCorners",
+    "applicationPath": "/Applications/Warm Corners.app",
+    "preferencesDomain": "com.ivogundlach.WarmCorners",
+    "preferencesKey": "warmcorners.config",
+    "loginRegistration": "SMAppService.mainApp"
+  },
+  "replacement": {
+    "bundleID": "com.ivogundlach.switchboard",
+    "applicationPath": "/Applications/Switchboard.app",
+    "moduleID": "desktop.warm-corners",
+    "preferencesKey": "switchboard.warm-corners.config"
+  },
+  "dataContract": {
+    "owner": "WarmCornerSettings",
+    "writer": "Switchboard main process",
+    "format": "JSON stored in UserDefaults Data",
+    "writeFreeze": "stop both pointer watchers before import or rollback",
+    "snapshot": "copy the exact legacy Data value into the transaction record's protected recovery payload",
+    "rollbackLimit": "new settings remain backward-readable because the schema matches the legacy Store shape"
+  },
+  "healthChecks": [
+    "exactly one pointer watcher is active",
+    "the imported corner assignments decode successfully",
+    "an assigned corner opens the selected test app once",
+    "the same corner cannot fire twice until the pointer leaves its release zone"
+  ],
+  "stabilizationTriggers": [
+    "immediate assigned-corner run",
+    "pause and resume",
+    "login start when enabled",
+    "one sleep and wake cycle"
+  ],
+  "retirement": {
+    "availability": "future production migration only; the current pilot has no removal operation",
+    "userApplication": "move to Trash only after stabilization and explicit retirement enablement",
+    "restoreSource": "independently retained signed release archive, never Trash",
+    "personalState": "preserve"
+  }
+}

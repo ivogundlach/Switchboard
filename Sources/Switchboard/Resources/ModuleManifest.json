@@ -1,0 +1,380 @@
+{
+  "schemaVersion": 1,
+  "supportedPlatform": "macOS 26, Apple silicon",
+  "modules": [
+    {
+      "id": "desktop.warm-corners",
+      "name": "Warm Corners",
+      "group": "Desktop Controls",
+      "purpose": "Open chosen apps when the pointer rests in a screen corner.",
+      "owner": "switchboard",
+      "availability": "pilot",
+      "components": ["Warm Corners app", "main-app login registration"],
+      "permissionCategories": [],
+      "legacyLabels": [],
+      "legacyBundleIDs": ["com.ivogundlach.WarmCorners"],
+      "configKeys": ["corner assignments", "dwell delay", "countdown", "start at login"]
+    },
+    {
+      "id": "desktop.kinetics",
+      "name": "Kinetics",
+      "group": "Desktop Controls",
+      "purpose": "Make desktop switching and Dock animations feel immediate.",
+      "owner": "switchboard",
+      "availability": "planned",
+      "components": ["Kinetics app", "Kinetics LoginLauncher"],
+      "permissionCategories": ["Accessibility"],
+      "legacyLabels": ["com.ivogundlach.Kinetics.LoginLauncher"],
+      "legacyBundleIDs": ["com.ivogundlach.Kinetics"],
+      "configKeys": ["animation behavior", "trackpad behavior", "start at login"]
+    },
+    {
+      "id": "desktop.audio-guard",
+      "name": "Audio Disconnect Guard",
+      "group": "Desktop Controls",
+      "purpose": "Mute newly selected non-Bluetooth outputs to prevent accidental playback.",
+      "owner": "switchboard",
+      "availability": "planned",
+      "components": ["signed audio watcher", "LaunchAgent"],
+      "permissionCategories": [],
+      "legacyLabels": ["com.ivogundlach.AudioDisconnectGuard"],
+      "legacyBundleIDs": [],
+      "configKeys": ["enabled"]
+    },
+    {
+      "id": "desktop.quit-on-close",
+      "name": "Quit on Close",
+      "group": "Desktop Controls",
+      "purpose": "Quit selected apps after their last window closes.",
+      "owner": "switchboard",
+      "availability": "planned",
+      "components": ["signed window watcher", "LaunchAgent", "legacy login registrations"],
+      "permissionCategories": ["Accessibility if required by the selected app"],
+      "legacyLabels": ["com.ivogundlach.quit-on-close", "com.ivogundlach.autoquit", "onebadidea.Swift-Quit-LaunchAtLoginHelper"],
+      "legacyBundleIDs": ["com.ivogundlach.quit-on-close"],
+      "configKeys": ["selected apps", "start at login"]
+    },
+    {
+      "id": "desktop.smart-wake",
+      "name": "Smart Wake",
+      "group": "Desktop Controls",
+      "purpose": "Coordinate wake, network, display-lock, Discord, and iMessage actions.",
+      "owner": "switchboard",
+      "availability": "planned",
+      "components": ["user watcher", "Discord watcher", "iMessage integration", "sleep guard"],
+      "permissionCategories": ["Administrator approval for sleep guard", "Automation when an integration needs it"],
+      "legacyLabels": ["com.user.smartwake", "com.user.smartwake.discord", "com.user.smartwake.imessage", "com.user.smartwake.sleep-guard"],
+      "legacyBundleIDs": ["com.ivo.smartwake.discord-watcher"],
+      "configKeys": ["network conditions", "display lock", "optional integrations"]
+    },
+    {
+      "id": "desktop.brightness",
+      "name": "Mac Brightness",
+      "group": "Desktop Controls",
+      "purpose": "Apply native day and night brightness levels without Apple Shortcuts.",
+      "owner": "switchboard",
+      "availability": "planned",
+      "components": ["native display brightness controller"],
+      "permissionCategories": [],
+      "legacyLabels": [],
+      "legacyBundleIDs": [],
+      "configKeys": ["day brightness", "night brightness", "schedule"]
+    },
+    {
+      "id": "mail.assistant",
+      "name": "Mail Assistant",
+      "group": "Mail",
+      "purpose": "Prepare scheduled Apple Mail reply drafts while leaving Mail data on the Mac.",
+      "owner": "switchboard",
+      "availability": "planned",
+      "components": ["MailAssistant runner", "scheduled draft LaunchAgent", "apple-mail command family"],
+      "permissionCategories": ["Mail access", "Automation if required"],
+      "legacyLabels": ["com.ivogundlach.apple-mail-draft-runner"],
+      "legacyBundleIDs": ["com.ivo.mail-assistant"],
+      "configKeys": ["schedule", "draft policy"]
+    },
+    {
+      "id": "files.copy-path",
+      "name": "Copy Path",
+      "group": "Files & Links",
+      "purpose": "Copy selected Finder paths from a Finder extension.",
+      "owner": "switchboard",
+      "availability": "planned",
+      "components": ["CopyPath host", "Finder extension", "Copy Filepath service migration"],
+      "permissionCategories": ["Finder extension enablement"],
+      "legacyLabels": [],
+      "legacyBundleIDs": ["com.ivo.CopyPath", "com.ivo.CopyPath.FinderExt"],
+      "configKeys": ["path formatting"]
+    },
+    {
+      "id": "files.auto-install-dmg",
+      "name": "AutoInstall DMG",
+      "group": "Files & Links",
+      "purpose": "Install apps from dropped DMG files through a serialized queue.",
+      "owner": "switchboard",
+      "availability": "planned",
+      "components": ["DMG drop handler", "installer worker"],
+      "permissionCategories": ["Administrator approval when an install requires it"],
+      "legacyLabels": [],
+      "legacyBundleIDs": ["com.ivogundlach.autoinstalldmg"],
+      "configKeys": ["conflict policy", "trash completed DMGs"]
+    },
+    {
+      "id": "links.claude-handler",
+      "name": "Claude Code URL Handler",
+      "group": "Files & Links",
+      "purpose": "Open registered Claude command links through a fixed signed handler.",
+      "owner": "switchboard",
+      "availability": "repair-required",
+      "components": ["URL-scheme handler"],
+      "permissionCategories": [],
+      "legacyLabels": [],
+      "legacyBundleIDs": ["com.anthropic.claude-code-url-handler"],
+      "configKeys": ["allowed link actions"]
+    },
+    {
+      "id": "links.copy-safari-url",
+      "name": "Copy Safari URL",
+      "group": "Files & Links",
+      "purpose": "Copy the current Safari page address from a macOS Service.",
+      "owner": "switchboard",
+      "availability": "planned",
+      "components": ["CopySafariURL service", "copy-safari-url command"],
+      "permissionCategories": ["Safari Automation"],
+      "legacyLabels": [],
+      "legacyBundleIDs": [],
+      "configKeys": []
+    },
+    {
+      "id": "connectors.local-read",
+      "name": "Local Read Connectors",
+      "group": "Local Data",
+      "purpose": "Provide read-only access to selected local Apple data sources for agents.",
+      "owner": "switchboard",
+      "availability": "planned",
+      "components": ["codex-read", "read_connectors.py", "Google Workspace read-only login adapter"],
+      "permissionCategories": ["Per-source read permission"],
+      "legacyLabels": [],
+      "legacyBundleIDs": [],
+      "configKeys": ["enabled data sources", "read-only account connection"]
+    },
+    {
+      "id": "systems.memory",
+      "name": "Memory System",
+      "group": "Agent Systems",
+      "purpose": "Back up, index, search, validate, and distill the local agent memory corpus.",
+      "owner": "switchboard",
+      "availability": "classification-required",
+      "components": ["corpus backup", "semantic index", "transcript distillation", "weekly health", "backup verification", "individually approved memory tools"],
+      "permissionCategories": ["Selected folder access"],
+      "legacyLabels": ["com.ivogundlach.memory-corpus-backup", "com.ivogundlach.memory-health-weekly", "com.ivogundlach.memory.semantic-index", "com.ivogundlach.transcript-distill", "com.ivogundlach.memory.graphify.semantic"],
+      "legacyBundleIDs": [],
+      "configKeys": ["memory root", "schedule", "retention"]
+    },
+    {
+      "id": "systems.codex-improvement",
+      "name": "Codex & System Improvement",
+      "group": "Agent Systems",
+      "purpose": "Keep agent instructions synchronized and run reviewed system-improvement checks.",
+      "owner": "switchboard",
+      "availability": "classification-required",
+      "components": ["Codex mirror sync", "weekly system improvement", "skill audits", "Claude window keeper"],
+      "permissionCategories": ["Selected folder access"],
+      "legacyLabels": ["com.ivogundlach.codex-mirror-sync", "com.ivogundlach.weekly-system-improvement", "com.ivogundlach.claude-window-keeper"],
+      "legacyBundleIDs": [],
+      "configKeys": ["instruction root", "schedule", "review policy"]
+    },
+    {
+      "id": "systems.repository-release",
+      "name": "Repository & Release Automation",
+      "group": "Agent Systems",
+      "purpose": "Synchronize owned repositories and run fixed signing and release operations.",
+      "owner": "switchboard",
+      "availability": "classification-required",
+      "components": ["app-repo sync", "personal-repo sync", "public toolkit publish", "Developer ID release", "release and signing audits"],
+      "permissionCategories": ["Selected folder access", "GitHub connection for enabled release actions"],
+      "legacyLabels": ["com.ivogundlach.app-repo-sync", "com.ivogundlach.personal-repo-sync", "com.ivogundlach.public-toolkit-publish"],
+      "legacyBundleIDs": [],
+      "configKeys": ["repository roots", "schedule", "release destination"]
+    },
+    {
+      "id": "systems.notebooklm",
+      "name": "NotebookLM Sync",
+      "group": "Agent Systems",
+      "purpose": "Keep selected NotebookLM notebooks authenticated and synchronized.",
+      "owner": "switchboard",
+      "availability": "planned",
+      "components": ["hourly sync", "daily auth keepalive", "ingest command"],
+      "permissionCategories": ["NotebookLM account connection"],
+      "legacyLabels": ["com.ivo.notebooklm-sync", "com.ivo.notebooklm-auth-refresh"],
+      "legacyBundleIDs": [],
+      "configKeys": ["notebooks", "schedule"]
+    },
+    {
+      "id": "systems.backup-audit",
+      "name": "Backup Coverage Audit",
+      "group": "Agent Systems",
+      "purpose": "Check whether important custom tools and state are covered by backups.",
+      "owner": "switchboard",
+      "availability": "planned",
+      "components": ["daily backup-coverage-audit cron replacement"],
+      "permissionCategories": ["Selected folder access"],
+      "legacyLabels": ["cron:backup-coverage-audit"],
+      "legacyBundleIDs": [],
+      "configKeys": ["covered roots", "schedule"]
+    },
+    {
+      "id": "systems.advanced-commands",
+      "name": "Advanced Commands",
+      "group": "Agent Systems",
+      "purpose": "Expose individually approved custom commands as fixed signed operations.",
+      "owner": "switchboard",
+      "availability": "classification-required",
+      "components": ["Ivo-owned commands not assigned to another product"],
+      "permissionCategories": ["Varies by approved command"],
+      "legacyLabels": [],
+      "legacyBundleIDs": [],
+      "configKeys": ["enabled operations"]
+    }
+  ],
+  "scheduledComponents": [
+    {"label":"com.ivo.market.refresh","owner":"standalone:Market","cadence":"at launch and every hour"},
+    {"label":"com.ivo.notebooklm-auth-refresh","owner":"switchboard:systems.notebooklm","cadence":"daily at 04:00"},
+    {"label":"com.ivo.notebooklm-sync","owner":"switchboard:systems.notebooklm","cadence":"at launch and every hour"},
+    {"label":"com.ivo.school-sync","owner":"standalone:School","cadence":"hourly at minute 7"},
+    {"label":"com.ivogundlach.AudioDisconnectGuard","owner":"switchboard:desktop.audio-guard","cadence":"continuous"},
+    {"label":"com.ivogundlach.app-repo-sync","owner":"switchboard:systems.repository-release","cadence":"12:30 and 22:30"},
+    {"label":"com.ivogundlach.apple-mail-draft-runner","owner":"switchboard:mail.assistant","cadence":"hourly from 08:00 through 22:00"},
+    {"label":"com.ivogundlach.codex-mirror-sync","owner":"switchboard:systems.codex-improvement","cadence":"daily at 04:00"},
+    {"label":"com.ivogundlach.memory-corpus-backup","owner":"switchboard:systems.memory","cadence":"daily at 04:00"},
+    {"label":"com.ivogundlach.memory-health-weekly","owner":"switchboard:systems.memory","cadence":"Sunday at 18:15"},
+    {"label":"com.ivogundlach.memory.semantic-index","owner":"switchboard:systems.memory","cadence":"daily at 04:00"},
+    {"label":"com.ivogundlach.personal-repo-sync","owner":"switchboard:systems.repository-release","cadence":"daily at 04:00"},
+    {"label":"com.ivogundlach.public-toolkit-publish","owner":"switchboard:systems.repository-release","cadence":"manual and intentionally disabled"},
+    {"label":"com.ivogundlach.quit-on-close","owner":"switchboard:desktop.quit-on-close","cadence":"continuous"},
+    {"label":"com.ivogundlach.tool-status-dashboard.repair","owner":"standalone:Tool Dashboard","cadence":"at launch and every minute"},
+    {"label":"com.ivogundlach.tool-status-dashboard.scan","owner":"standalone:Tool Dashboard","cadence":"at launch and every five minutes"},
+    {"label":"com.ivogundlach.transcript-distill","owner":"switchboard:systems.memory","cadence":"daily at 04:00"},
+    {"label":"com.ivogundlach.vitals.findings","owner":"standalone:Vitals","cadence":"daily at 04:00"},
+    {"label":"com.ivogundlach.vitals.sampler","owner":"standalone:Vitals","cadence":"continuous"},
+    {"label":"com.ivogundlach.weekly-system-improvement","owner":"switchboard:systems.codex-improvement","cadence":"at launch, every six hours, and Sunday at 19:00"},
+    {"label":"com.user.smartwake","owner":"switchboard:desktop.smart-wake","cadence":"continuous"},
+    {"label":"com.user.smartwake.discord","owner":"switchboard:desktop.smart-wake","cadence":"registered on demand"},
+    {"label":"cron:backup-coverage-audit","owner":"switchboard:systems.backup-audit","cadence":"daily at 04:00"},
+    {"label":"com.ivogundlach.vitals.helper","owner":"standalone:Vitals","cadence":"privileged continuous service"},
+    {"label":"com.user.smartwake.sleep-guard","owner":"switchboard:desktop.smart-wake","cadence":"privileged continuous service"},
+    {"label":"com.ivogundlach.Kinetics.LoginLauncher","owner":"switchboard:desktop.kinetics","cadence":"login registration"},
+    {"label":"com.ivogundlach.autoquit","owner":"switchboard:desktop.quit-on-close","cadence":"enabled legacy registration"},
+    {"label":"onebadidea.Swift-Quit-LaunchAtLoginHelper","owner":"switchboard:desktop.quit-on-close","cadence":"enabled legacy registration"},
+    {"label":"com.ivogundlach.memory.graphify.semantic","owner":"switchboard:systems.memory","cadence":"enabled registration; source unresolved"},
+    {"label":"com.user.smartwake.imessage","owner":"switchboard:desktop.smart-wake","cadence":"enabled registration; source unresolved"},
+    {"label":"com.ivogundlach.claude-window-keeper","owner":"switchboard:systems.codex-improvement","cadence":"intentionally disabled"}
+  ],
+  "ownedCommandFamilies": [
+    {
+      "owner":"switchboard:mail.assistant",
+      "items":["apple-mail-draft-assistant","apple-mail-draft-runner","apple-mail-rowid-body","apple-mail-trash-hide-email-audit","mail-assistant-app-build"]
+    },
+    {
+      "owner":"switchboard:systems.memory",
+      "items":["memory-corpus-backup","memory-transcript-distill","semantic-agy-notify","semantic-agy-reauth","semantic-corpus","semantic-index-retry","semantic-index-status"]
+    },
+    {
+      "owner":"switchboard:systems.codex-improvement",
+      "items":["codex-mirror-sync","codex-sync-verify","improve-system-log","luna-implement","open-codex.sh","reviewer","skill-drift-check","weekly-system-improvement","weekly-system-improvement-health","weekly_system_improvement.py","weekly_system_improvement_acceptance.py"]
+    },
+    {
+      "owner":"switchboard:systems.repository-release",
+      "items":["app-repo-bootstrap","app-repo-lib.sh","app-repo-sync","developer-id-release","developer-id-release-audit","personal-repo-sync","public-toolkit-publish","refresh-app-icons","signing-audit"]
+    },
+    {
+      "owner":"switchboard:systems.backup-audit",
+      "items":["backup-coverage-audit"]
+    },
+    {
+      "owner":"switchboard:links.copy-safari-url",
+      "items":["copy-safari-url"]
+    },
+    {
+      "owner":"switchboard:desktop.smart-wake",
+      "items":["smart-wake","smart-wake-diagnose","configure-display-lock.sh","discord-command-watch.py","install-sleep-guard.sh","lib.sh","sleep-guard-root.sh","smart-wake.sh","wifi-ssid.py"]
+    },
+    {
+      "owner":"switchboard:systems.notebooklm",
+      "items":["Ingest nblm.command","auth_keepalive.sh","ingest_nblm.sh","notebooklm_sync.py","sync_all.sh"]
+    },
+    {
+      "owner":"switchboard:systems.advanced-commands",
+      "items":["agy","arxiv-pp-cli","cyber-skill-triage","digg-pp-cli","env","env.fish","last30days","mac-process-audit","process-cleanup-sudo-20260623.sh","studykit","swift-smoke","techmeme-pp-cli"]
+    },
+    {
+      "owner":"standalone:Market",
+      "items":["market-cron","market-refresh"]
+    },
+    {
+      "owner":"standalone:School",
+      "items":["school-mail","school-sync"]
+    },
+    {
+      "owner":"standalone:Tool Dashboard",
+      "items":["tool-status-background-scan","tool-status-notify","tool-status-register","tool-status-repair-worker"]
+    },
+    {
+      "owner":"standalone:UsageQueue",
+      "items":["queue-when-usage"]
+    },
+    {
+      "owner":"standalone:Vitals",
+      "items":["vitals-findings"]
+    },
+    {
+      "owner":"excluded:third-party-dependent",
+      "items":["kiwix-manage","kiwix-search","kiwix-serve","ocx","opencodex","uv","uvx"]
+    }
+  ],
+  "memoryToolCandidates": [
+    "chunk_store.py","chunker.py","daemon_client.py","embedder.py","file_eligibility.py","fusion.py","index_scope.py","memory-archive-source","memory-backup-verify","memory-capture","memory-coverage-drift","memory-health-weekly","memory-lint","memory-project-init","memory-prune","memory-query-daemon","memory-retrieval-eval","memory-search","memory-secret-scan","memory-semantic-build","memory-semantic-query","memory-vector-build","question_index.py","semantic-agy-build.py","system-manifest-build","transcript_distill.py","vector_matrix.py"
+  ],
+  "macOSServices": [
+    {"name":"Copy Filepath.workflow","owner":"switchboard:files.copy-path"},
+    {"name":"CopySafariURL.workflow","owner":"switchboard:links.copy-safari-url"}
+  ],
+  "standaloneProducts": [
+    {"name":"Market","workers":["hourly background refresh","market refresh and cron commands"]},
+    {"name":"School","workers":["signed SchoolSync runner","Canvas/Banner/EventKit sync","School-specific mail helper"]},
+    {"name":"Tool Dashboard","workers":["background scan","repair worker","notifications","tool registration"]},
+    {"name":"Vitals","workers":["continuous sampler","scheduled findings","privileged process helper"]},
+    {"name":"UsageQueue","workers":["queue-when-usage command and scheduler"]},
+    {"name":"ReleaseRadar","workers":[]},
+    {"name":"NutrientTracker","workers":[]},
+    {"name":"Psephos","workers":[]},
+    {"name":"Tax Simulator","workers":[]},
+    {"name":"Runway","workers":[]}
+  ],
+  "separateSafariApps": ["ForceCopyPaste", "NewTabLinks", "YouTube Defaults"],
+  "excludedShortcuts": [
+    {"name":"Spokenly Background Dictation","owner":"excluded:shortcut","disposition":"stays in Apple Shortcuts"},
+    {"name":"Water Eject","owner":"excluded:shortcut","disposition":"stays in Apple Shortcuts"},
+    {"name":"Disconnect Tailscale","owner":"excluded:shortcut","disposition":"stays in Apple Shortcuts"},
+    {"name":"Start Tailscale","owner":"excluded:shortcut","disposition":"stays in Apple Shortcuts"},
+    {"name":"Set Night Brightness","owner":"excluded:shortcut","disposition":"generic Shortcut remains excluded"},
+    {"name":"Set Day Brightness","owner":"excluded:shortcut","disposition":"generic Shortcut remains excluded"},
+    {"name":"Refresh Apps on Wi-Fi","owner":"excluded:shortcut","disposition":"stays in Apple Shortcuts"},
+    {"name":"Sleep","owner":"excluded:shortcut","disposition":"stays in Apple Shortcuts"}
+  ],
+  "replacedShortcuts": [
+    {"name":"Set Mac Day Brightness","owner":"switchboard:desktop.brightness","disposition":"replace with native Switchboard behavior"},
+    {"name":"Set Mac Night brightness","owner":"switchboard:desktop.brightness","disposition":"replace with native Switchboard behavior"}
+  ],
+  "excludedThirdPartyUtilities": [
+    {"name":"Amethyst","owner":"excluded:third-party","disposition":"maintained fork remains a separate repository"},
+    {"name":"skhd","owner":"excluded:third-party","disposition":"vendor utility remains separate"},
+    {"name":"OpenCodex proxy","owner":"excluded:third-party","disposition":"third-party service remains separate"},
+    {"name":"o3IPTV playlist refresh","owner":"excluded:third-party","disposition":"third-party app service remains separate"},
+    {"name":"Google Keystone tombstones","owner":"excluded:third-party","disposition":"empty vendor tombstones are not migrated"}
+  ],
+  "excludedSupersededOrDeleted": [
+    {"name":"YouTubeHomeReload","owner":"excluded:superseded","disposition":"behavior already merged into YouTube Defaults"},
+    {"name":"legacy Mail Assistant .bak scheduler","owner":"excluded:superseded","disposition":"inactive backup replaced by current scheduler"}
+  ]
+}

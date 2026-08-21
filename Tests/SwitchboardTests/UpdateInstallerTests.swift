@@ -5,6 +5,37 @@ import Testing
 
 struct UpdateInstallerTests {
     @Test
+    func installedBundleInfoReadsFreshPlistAfterReplacement() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "switchboard-bundle-info-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let app = root.appendingPathComponent("Switchboard.app", isDirectory: true)
+        let infoURL = app.appendingPathComponent("Contents/Info.plist")
+        try FileManager.default.createDirectory(
+            at: infoURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        func writeVersion(_ version: String) throws {
+            let data = try PropertyListSerialization.data(
+                fromPropertyList: [
+                    "CFBundleIdentifier": "com.ivogundlach.switchboard",
+                    "CFBundleShortVersionString": version,
+                ],
+                format: .xml,
+                options: 0
+            )
+            try data.write(to: infoURL, options: .atomic)
+        }
+        let fileSystem = LocalUpdateInstallerFileSystem()
+        try writeVersion("0.1.0")
+        #expect(try fileSystem.bundleInfo(at: app).version == "0.1.0")
+        try writeVersion("0.2.3")
+        #expect(try fileSystem.bundleInfo(at: app).version == "0.2.3")
+    }
+
+    @Test
     func emptyCurrentBundleTrustAnchorFailsClosed() {
         #expect(throws: UpdateInstallerError.self) {
             try UpdateTrustAnchor(currentBundle: Bundle.main)

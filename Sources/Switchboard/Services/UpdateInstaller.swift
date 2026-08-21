@@ -258,12 +258,18 @@ public final class LocalUpdateInstallerFileSystem: UpdateInstallerFileSystem {
     }
 
     public func bundleInfo(at url: URL) throws -> UpdateBundleInfo {
-        guard let bundle = Bundle(url: url) else {
+        let infoURL = url.appendingPathComponent("Contents/Info.plist")
+        let data = try Data(contentsOf: infoURL)
+        guard let info = try PropertyListSerialization.propertyList(
+            from: data,
+            options: [],
+            format: nil
+        ) as? [String: Any] else {
             throw UpdateInstallerError.missingBundleIdentifier
         }
-        let id = bundle.object(forInfoDictionaryKey: "CFBundleIdentifier") as? String
-        let shortVersion = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-        let buildVersion = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+        let id = info["CFBundleIdentifier"] as? String
+        let shortVersion = info["CFBundleShortVersionString"] as? String
+        let buildVersion = info["CFBundleVersion"] as? String
         let version = shortVersion ?? buildVersion
         return UpdateBundleInfo(bundleIdentifier: id, version: version)
     }

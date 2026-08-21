@@ -5,6 +5,12 @@ import Testing
 
 struct LegacySchedulerMigrationTests {
     @Test
+    func duplicateExactCronEntriesAreAmbiguous() {
+        let line = "0 4 * * * /Users/test/.local/bin/backup-coverage-audit"
+        let data = Data("\(line)\n# keep\n\(line)\n".utf8)
+        #expect(LegacySchedulerMigration.countExactCronLines(line, in: data) == 2)
+    }
+    @Test
     func rejectsInvalidAndPrivilegedLabels() {
         #expect(!LegacySchedulerMigration.isValidLabel("../evil"))
         #expect(!LegacySchedulerMigration.isValidLabel("com.example bad"))

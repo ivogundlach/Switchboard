@@ -1,25 +1,60 @@
 # Switchboard decisions
 
-These boundaries describe the current product, not a promise that every catalog entry is enabled.
+This file records the product boundaries that reviewers and contributors should preserve.
 
-## Product and module boundary
+## 1. One control center, explicit ownership
 
-Switchboard is one menu-bar app for general-purpose Mac utilities with one background agent. There are 17 ready modules and no planned or pilot modules. Warm Corners uses a same-identity compatibility bridge for one-time handoff, then runs inside Switchboard; retirement is recoverable through verified archives and Trash. Kinetics is ready as a signed nested companion owned by one continuous Switchboard agent job. A separate inert migration-only LoginLauncher bundle preserves exact SMAppService identity for recovery, but is never registered or launched. Smart Wake core wake/network/display-lock behavior is ready; its privileged sleep guard remains outside generic migration because it consumes the same user-state lease, while iMessage remains unresolved and is not migrated. Copy Path is a bundled ready module.
+Switchboard owns 17 ready modules, one background agent, its bundled commands and Services, and its explicitly bundled helpers/extensions. Standalone products and their workers stay in their own DMGs. Safari apps stay separate. Third-party tools, forks, and general Apple Shortcuts stay separate. The two Mac brightness shortcuts are replaced by the native Mac Brightness module.
 
-## Bundled operations
+**Reason:** shared control and scheduling are useful; silently absorbing another product or account-connected tool makes permissions, updates, and recovery ambiguous.
 
-Sanitized command payloads, macOS Services, and the Copy Path Finder Sync extension ship inside the Switchboard bundle. Generic `LegacySchedulerMigration` retires only legacy LaunchAgents and exact cron entries, with recovery and rollback. Kinetics separately retires its legacy login registration. No generic app-bundle retirement exists yet, so the existing Copy Path host app remains. Copy Path uses its exact bundled extension identity and reverses an immediate activation failure. Settings are preserved through same-identity/canonical-state reuse or a module-specific migration, not a universal importer.
+## 2. Normal launch is visible; background launch is not
 
-## Separate products and integrations
+A normal launch opens setup/review and the control center. Login-item and explicit background launches stay hidden.
 
-Market, School, Tool Dashboard, Vitals, UsageQueue, ReleaseRadar, NutrientTracker, Psephos, Tax Simulator, and Runway remain standalone products; their workers remain in their own app bundles and DMGs. ForceCopyPaste, NewTabLinks, and YouTube Defaults remain separate Safari apps. Third-party utilities and general Apple Shortcuts stay outside Switchboard.
+**Reason:** first-run migration needs a human decision, while login startup must not interrupt the desktop.
 
-## Updates and distribution
+## 3. Legacy state wins once, through a per-component contract
 
-The implemented updater discovers real published GitHub releases, downloads the update manifest and DMG, verifies the SHA-256 hash, runs a nested updater, and supports rollback from a verified recovery copy.
+The upgrade scanner reviews exact components and each contract declares `migrate`, `retain`, or `alreadyRetired`. Existing legacy settings/state are authoritative for the one import. One confirmation starts the selected work. Import behavior is module-owned because settings formats and semantics differ.
 
-The release script requires Apple Developer ID signing, hardened runtime, notarization, stapling, and verification before publishing an immutable GitHub release. The Developer ID Application certificate for Team `Q2X7X86GYR` is locally available, and a disposable full nested-app Developer ID signing, secure-timestamp, and strict verification passed. The GitHub updater and release script are implemented, but notarization and publishing were not run. A signed local installation and Warm Corners migration verification passed; no public DMG or public release exists. Public publication still requires notarization, Gatekeeper and privacy checks, and explicit release authorization.
+**Reason:** an explicit contract prevents accidental takeover and makes a partial upgrade explainable.
 
-## Source and license
+## 4. Permissions follow the actor
 
-Source is public under the MIT License. Public source does not change the separate product, worker, Safari-app, permission, or migration boundaries above.
+Permission onboarding is progressive and exact. Accessibility is attributed to Switchboard, nested Kinetics, or the Quit helper according to the actor. Mail Assistant Full Disk Access belongs to its exact nested helper. Local Read permissions belong to the permanent external command host. App Management appears only when an old app needs retirement. Administrator prompts occur only at the privileged action itself.
+
+**Reason:** the user can grant the smallest permission to the process that actually needs it. Blanket Full Disk Access is not a setup prerequisite.
+
+## 5. Replacement before retirement
+
+Command and Service activation is reversible. Scheduler migration is journaled and recoverable. An old app is moved to Trash only after exact path and identity validation, trusted signature checks, a verified archive, and replacement capability health. Unresolved jobs remain active and visible.
+
+**Reason:** an upgrade must fail closed and leave a restore path instead of creating a silent outage or data-loss event.
+
+## 6. Kinetics keeps identity and proves health
+
+Kinetics runs as a signed nested companion under the Switchboard agent. It preserves the existing preferences domain and keys. The migration-only LoginLauncher is inert and exists only for exact login identity continuity. A write-ahead handoff journal restores an interrupted pre-health stop. Retirement waits for five stable checks of Accessibility, the event tap, the exact process, a per-attempt nonce, and the continuous-agent heartbeat.
+
+**Reason:** Kinetics is sensitive to duplicate event watchers and login races; identity continuity and live health are stronger evidence than a successful process launch.
+
+## 7. Updates are verified before handoff
+
+The updater verifies the GitHub manifest, expected version, Developer ID Team `Q2X7X86GYR`, architecture, signature, and SHA-256, then uses a verified recovery copy for rollback.
+
+**Reason:** release metadata and downloaded bytes are untrusted until independently checked. A local implementation is not evidence of a public release.
+
+## 8. Public release is a gated claim
+
+The current verification record is **139 tests in 22 suites**. The Developer ID certificate is available. Publication requires the release checks, privacy/secret checks, Gatekeeper evidence, and explicit authorization; source files alone never prove that a release occurred.
+
+**Reason:** contributors and users must be able to distinguish implemented release machinery from an artifact that has actually been published.
+
+## Source map
+
+- Ownership: `Sources/Switchboard/Resources/ModuleManifest.json`
+- Upgrade dispositions and permissions: `Sources/Switchboard/Resources/UpgradeMigrationContract.json`
+- Review and precedence: `Sources/Switchboard/Services/LegacyUpgradeScanner.swift`, `Sources/Switchboard/Models/ModuleStore.swift`
+- Recovery and retirement: `Sources/Switchboard/Services/LegacySchedulerMigration.swift`, `Sources/Switchboard/Services/LegacyAppRetirement.swift`, `Sources/Switchboard/Services/OperationCoordinator.swift`
+- Kinetics: `Sources/Switchboard/Modules/Kinetics/`, `Vendor/Kinetics/Sources/Kinetics/`
+- Updates and release checks: `Sources/Switchboard/Services/UpdateInstaller.swift`, `Sources/Switchboard/Services/GitHubUpdateService.swift`, `scripts/publish-release.sh`

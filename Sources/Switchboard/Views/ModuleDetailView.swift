@@ -13,7 +13,7 @@ struct ModuleDetailView: View {
                     WarmCornersSettingsView(store: store)
                 }
                 if module.id == "desktop.brightness" {
-                    BrightnessSettingsView(store: store)
+                    BrightnessSettingsView(brightness: store.brightness)
                 }
                 details
                 inventory
@@ -128,22 +128,54 @@ struct ModuleDetailView: View {
 }
 
 private struct BrightnessSettingsView: View {
-    @Bindable var store: ModuleStore
+    @Bindable var brightness: BrightnessController
     @State private var resultText = "Choose a preset"
 
     var body: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Display brightness").font(.system(size: 15, weight: .semibold))
-                Text(resultText).font(.caption).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Display brightness").font(.system(size: 15, weight: .semibold))
+                    Text(resultText).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Apply Night") { apply(brightness.setNight()) }
+                Button("Apply Day") { apply(brightness.setDay()) }
+                    .buttonStyle(.borderedProminent)
             }
-            Spacer()
-            Button("Night · 30%") { apply(store.brightness.setNight()) }
-            Button("Day · 100%") { apply(store.brightness.setDay()) }
-                .buttonStyle(.borderedProminent)
+
+            brightnessRow(
+                title: "Day",
+                value: Binding(
+                    get: { brightness.dayLevel },
+                    set: { brightness.setDayLevel($0) }
+                )
+            )
+            brightnessRow(
+                title: "Night",
+                value: Binding(
+                    get: { brightness.nightLevel },
+                    set: { brightness.setNightLevel($0) }
+                )
+            )
+            Text("The old Shortcuts expose their names but not their internal values to background tools. These editable defaults replace them without running a shortcut or changing brightness during migration.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
         }
         .padding(18)
         .switchboardPanel()
+    }
+
+    private func brightnessRow(title: String, value: Binding<Double>) -> some View {
+        HStack(spacing: 12) {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold))
+                .frame(width: 42, alignment: .leading)
+            Slider(value: value, in: 0...1, step: 0.05)
+            Text("\(Int(value.wrappedValue * 100))%")
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .frame(width: 42, alignment: .trailing)
+        }
     }
 
     private func apply(_ result: BrightnessResult) {

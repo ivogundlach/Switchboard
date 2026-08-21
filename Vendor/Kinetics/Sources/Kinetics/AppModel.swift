@@ -140,6 +140,40 @@ final class KineticsModel: ObservableObject {
             spaceIndex = nil
             spaceCount = nil
         }
+        writeSwitchboardHealth()
+    }
+
+    private func writeSwitchboardHealth() {
+        let fileManager = FileManager.default
+        let directory = fileManager.homeDirectoryForCurrentUser
+            .appending(path: "Library/Application Support/Switchboard/Health", directoryHint: .isDirectory)
+        let file = directory.appending(path: "Kinetics.json")
+        let payload: [String: Any] = [
+            "schemaVersion": 1,
+            "bundleID": KineticsConstants.bundleIdentifier,
+            "pid": getpid(),
+            "executablePath": Bundle.main.executableURL?.path ?? "",
+            "enabled": enabled,
+            "accessibilityTrusted": accessibilityTrusted,
+            "eventTapActive": eventTapActive,
+            "ready": state.isReady,
+            "healthNonce": ProcessInfo.processInfo.environment["SWITCHBOARD_HEALTH_NONCE"] ?? "",
+            "state": state.label,
+            "timestamp": ISO8601DateFormatter().string(from: Date()),
+        ]
+        do {
+            try fileManager.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+            try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+            let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+            try data.write(to: file, options: .atomic)
+            try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+        } catch {
+            logger.error("Could not publish Switchboard health: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     func configureEngine() {

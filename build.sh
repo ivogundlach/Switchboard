@@ -44,6 +44,7 @@ cp "$ROOT/Sources/Switchboard/Resources/ModuleManifest.json" "$APP/Contents/Reso
 cp "$ROOT/Sources/Switchboard/Resources/WarmCornersMigrationContract.json" "$APP/Contents/Resources/WarmCornersMigrationContract.json"
 cp "$ROOT/Sources/Switchboard/Resources/InventoryBaseline.json" "$APP/Contents/Resources/InventoryBaseline.json"
 cp "$ROOT/Sources/Switchboard/Resources/RuntimeManifest.json" "$APP/Contents/Resources/RuntimeManifest.json"
+cp "$ROOT/Sources/Switchboard/Resources/UpgradeMigrationContract.json" "$APP/Contents/Resources/UpgradeMigrationContract.json"
 cp "$ROOT/Resources/com.ivogundlach.switchboard.agent.plist" "$APP/Contents/Library/LaunchAgents/com.ivogundlach.switchboard.agent.plist"
 KINETICS_HELPER_APP="$APP/Contents/Library/LoginItems/Kinetics Login Launcher.app"
 KINETICS_HELPER_EXECUTABLE="$KINETICS_HELPER_APP/Contents/MacOS/Kinetics Login Launcher"

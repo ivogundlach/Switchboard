@@ -274,6 +274,90 @@ final class LegacySchedulerMigration {
         }
     }
 
+    @discardableResult
+    func restoreLastMigration() throws -> Bool {
+        let recordURL = environment.applicationSupportDirectory
+            .appending(path: "Migration/\(moduleID).json")
+        let metadata = try fileSystem.metadata(at: recordURL)
+        guard metadata.exists, metadata.isRegularFile, !metadata.isSymbolicLink else { return false }
+        var record = try JSONDecoder().decode(
+            LegacySchedulerMigrationRecord.self,
+            from: fileSystem.read(recordURL)
+        )
+        guard record.moduleID == moduleID,
+              record.state == .completed || record.state == .quiescing
+                || record.state == .quiesced || record.state == .rollingBack else {
+            return false
+        }
+        try transition(&record, to: .rollingBack, action: "replacement health rollback intent")
+        try persistence.persist(record)
+        for artifact in record.artifacts.reversed() {
+            let recoveryURL = URL(fileURLWithPath: artifact.recoveryPath)
+            let recovery = try fileSystem.read(recoveryURL)
+            guard Self.sha256(recovery) == artifact.sha256, recovery.count == artifact.byteCount else {
+                throw LegacySchedulerMigrationError.rollbackFailed("recovery snapshot mismatch: \(artifact.label)")
+            }
+            if artifact.kind == "cron" {
+                guard artifact.wasLoaded else { continue }
+                let currentResult = try runCrontab(arguments: ["-l"])
+                let current = currentResult.succeeded ? currentResult.stdout : Data()
+                let line = Self.backupAuditCronLine(homeDirectory: environment.homeDirectory)
+                let matches = Self.countExactCronLines(line, in: current)
+                guard matches <= 1 else {
+                    throw LegacySchedulerMigrationError.rollbackFailed("ambiguous duplicate cron entries")
+                }
+                if matches == 0 {
+                    var replacement = current
+                    if !replacement.isEmpty, replacement.last != 10 { replacement.append(10) }
+                    replacement.append(Data((line + "\n").utf8))
+                    let result = try runCrontab(arguments: ["-"], input: replacement)
+                    guard result.succeeded else {
+                        throw LegacySchedulerMigrationError.rollbackFailed("could not restore cron")
+                    }
+                }
+                continue
+            }
+            guard let originalPath = artifact.originalPath else {
+                throw LegacySchedulerMigrationError.rollbackFailed("missing original path: \(artifact.label)")
+            }
+            let originalURL = URL(fileURLWithPath: originalPath)
+            let originalMetadata = try fileSystem.metadata(at: originalURL)
+            if !originalMetadata.exists {
+                let archived = archiveURL(for: artifact.label, transactionID: record.transactionID)
+                if try fileSystem.metadata(at: archived).exists {
+                    try fileSystem.move(archived, to: originalURL)
+                } else {
+                    try fileSystem.write(recovery, to: originalURL, permissions: 0o600)
+                }
+            }
+            if artifact.wasLoaded, try !isLoaded(artifact.label) {
+                let result = try runLaunchctl(arguments: ["bootstrap", "gui/\(environment.userID)", originalURL.path])
+                guard result.succeeded, try isLoaded(artifact.label) else {
+                    throw LegacySchedulerMigrationError.rollbackFailed("could not reload \(artifact.label)")
+                }
+            }
+        }
+        try transition(&record, to: .rolledBack, action: "replacement health rollback completed")
+        try persistence.persist(record)
+        return true
+    }
+
+    func reconcileInterruptedMigration() throws -> Bool {
+        let recordURL = environment.applicationSupportDirectory
+            .appending(path: "Migration/\(moduleID).json")
+        let metadata = try fileSystem.metadata(at: recordURL)
+        guard metadata.exists, metadata.isRegularFile, !metadata.isSymbolicLink else { return false }
+        let record = try JSONDecoder().decode(
+            LegacySchedulerMigrationRecord.self,
+            from: fileSystem.read(recordURL)
+        )
+        guard record.moduleID == moduleID,
+              record.state == .quiescing || record.state == .quiesced || record.state == .rollingBack else {
+            return false
+        }
+        return try restoreLastMigration()
+    }
+
     private func finishEmptyMigration() throws -> LegacySchedulerMigrationRecord {
         var record = LegacySchedulerMigrationRecord(moduleID: moduleID)
         try transition(&record, to: .completed, action: "no legacy labels")
@@ -312,7 +396,11 @@ final class LegacySchedulerMigration {
             let listed = try runCrontab(arguments: ["-l"])
             let data = listed.succeeded ? listed.stdout : Data()
             let exactLine = Self.backupAuditCronLine(homeDirectory: environment.homeDirectory)
-            let present = Self.containsExactCronLine(exactLine, in: data)
+            let matchCount = Self.countExactCronLines(exactLine, in: data)
+            guard matchCount <= 1 else {
+                throw LegacySchedulerMigrationError.verificationFailed("ambiguous duplicate cron entries")
+            }
+            let present = matchCount == 1
             let hash = Self.sha256(data)
             try fileSystem.write(data, to: recoveryURL, permissions: 0o600)
             record.artifacts.append(.init(
@@ -400,6 +488,9 @@ final class LegacySchedulerMigration {
             }
             let current = try runCrontab(arguments: ["-l"]).stdout
             let exactLine = Self.backupAuditCronLine(homeDirectory: environment.homeDirectory)
+            guard Self.countExactCronLines(exactLine, in: current) == 1 else {
+                throw LegacySchedulerMigrationError.verificationFailed("cron changed or contains ambiguous matches")
+            }
             let replacement = Self.removingExactCronLine(exactLine, from: current)
             guard replacement != current else {
                 throw LegacySchedulerMigrationError.verificationFailed("cron line not found: \(snapshot.label)")
@@ -512,7 +603,7 @@ final class LegacySchedulerMigration {
         return !label.contains("..") && !label.contains(".-") && !label.contains("-.")
     }
 
-    private static func isSafeComponent(_ value: String) -> Bool {
+    static func isSafeComponent(_ value: String) -> Bool {
         !value.isEmpty && value != "." && value != ".." && !value.contains("/") && !value.contains("\\")
     }
 
@@ -522,9 +613,13 @@ final class LegacySchedulerMigration {
     }
 
     static func containsExactCronLine(_ exactLine: String, in data: Data) -> Bool {
-        data.split(separator: 0x0A, omittingEmptySubsequences: false).contains { line in
+        countExactCronLines(exactLine, in: data) > 0
+    }
+
+    static func countExactCronLines(_ exactLine: String, in data: Data) -> Int {
+        data.split(separator: 0x0A, omittingEmptySubsequences: false).reduce(into: 0) { count, line in
             let line = line.last == 0x0D ? line.dropLast() : line[...]
-            return Data(line) == Data(exactLine.utf8)
+            if Data(line) == Data(exactLine.utf8) { count += 1 }
         }
     }
 

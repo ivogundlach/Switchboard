@@ -38,6 +38,11 @@ struct AgentJobState: Codable, Equatable {
     var lastAttempt: Date?
     var lastSuccess: Date?
     var lastFailure: String?
+    var runningPID: Int32?
+    var runningExecutablePath: String?
+    var heartbeat: Date?
+    var healthNonce: String?
+    var processStartedAt: Date?
 }
 
 struct AgentStateFile: Codable, Equatable {
@@ -145,6 +150,7 @@ final class SwitchboardAgent {
         let process: Process
         let logHandle: FileHandle
         let continuous: Bool
+        let executablePath: String
     }
 
     private let bundleURL: URL
@@ -177,9 +183,23 @@ final class SwitchboardAgent {
         let enabled = try ModuleSelectionFile.load(from: applicationSupportURL)
         var state = try loadState()
         reapCompletedProcesses(state: &state)
+        for (label, active) in activeProcesses where active.process.isRunning {
+            var job = state.jobs[label] ?? AgentJobState()
+            job.runningPID = active.process.processIdentifier
+            job.runningExecutablePath = active.executablePath
+            job.heartbeat = Date()
+            job.lastFailure = nil
+            state.jobs[label] = job
+        }
         for job in runtime.jobs where enabled.contains(job.moduleID) {
             let prior = state.jobs[job.label]
             if job.schedule.kind == .continuous {
+                let desiredNonce = healthNonce(for: job.moduleID)
+                if let active = activeProcesses[job.label], active.process.isRunning,
+                   prior?.healthNonce != desiredNonce {
+                    active.process.terminate()
+                    continue
+                }
                 if activeProcesses[job.label]?.process.isRunning != true {
                     try start(job, continuous: true, state: &state)
                 }
@@ -216,6 +236,7 @@ final class SwitchboardAgent {
             "SMART_WAKE_HOME": fileManager.homeDirectoryForCurrentUser
                 .appending(path: ".config/smart-wake", directoryHint: .isDirectory).path,
             "SMART_WAKE_CODE_DIR": executable.deletingLastPathComponent().path,
+            "SWITCHBOARD_HEALTH_NONCE": healthNonce(for: job.moduleID) ?? "",
         ]
         let logs = applicationSupportURL.appending(path: "Logs", directoryHint: .isDirectory)
         try fileManager.createDirectory(at: logs, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -232,8 +253,14 @@ final class SwitchboardAgent {
             activeProcesses[job.label] = ActiveProcess(
                 process: process,
                 logHandle: handle,
-                continuous: continuous
+                continuous: continuous,
+                executablePath: executable.path
             )
+            state.jobs[job.label]?.runningPID = process.processIdentifier
+            state.jobs[job.label]?.runningExecutablePath = executable.path
+            state.jobs[job.label]?.heartbeat = Date()
+            state.jobs[job.label]?.healthNonce = healthNonce(for: job.moduleID)
+            state.jobs[job.label]?.processStartedAt = Date()
         } catch {
             try? handle.close()
             state.jobs[job.label]?.lastFailure = error.localizedDescription
@@ -245,6 +272,9 @@ final class SwitchboardAgent {
         for (label, active) in activeProcesses where !active.process.isRunning {
             try? active.logHandle.close()
             var job = state.jobs[label] ?? AgentJobState()
+            job.runningPID = nil
+            job.runningExecutablePath = nil
+            job.heartbeat = nil
             if active.process.terminationStatus == 0 {
                 job.lastSuccess = Date()
                 job.lastFailure = nil
@@ -259,6 +289,18 @@ final class SwitchboardAgent {
     private func loadRuntimeManifest() throws -> RuntimeManifest {
         guard let url = Bundle.main.url(forResource: "RuntimeManifest", withExtension: "json") else { throw AgentError.missingManifest }
         return try JSONDecoder().decode(RuntimeManifest.self, from: Data(contentsOf: url))
+    }
+
+    private func healthNonce(for moduleID: String) -> String? {
+        guard LegacySchedulerMigration.isSafeComponent(moduleID) else { return nil }
+        let url = applicationSupportURL.appending(path: "Upgrade/health-nonce-\(moduleID).txt")
+        guard let attributes = try? fileManager.attributesOfItem(atPath: url.path),
+              attributes[.type] as? FileAttributeType == .typeRegular,
+              (attributes[.ownerAccountID] as? NSNumber)?.uint32Value == getuid(),
+              ((attributes[.posixPermissions] as? NSNumber)?.uint16Value ?? 0o777) & 0o077 == 0,
+              let value = try? String(contentsOf: url, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+              value.range(of: "^[0-9A-Fa-f-]{36}$", options: .regularExpression) != nil else { return nil }
+        return value
     }
 
     private func loadModuleManifest() throws -> ModuleManifest {

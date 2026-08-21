@@ -5,6 +5,20 @@ import Testing
 
 struct DesktopControllerTests {
     @Test
+    func brightnessLevelsPersistWithoutChangingDisplays() throws {
+        let suite = "SwitchboardTests.Brightness.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let first = BrightnessController(defaults: defaults, displayAPI: RecordingBrightnessAPI(displays: []))
+        first.setDayLevel(0.8)
+        first.setNightLevel(0.2)
+
+        let restored = BrightnessController(defaults: defaults, displayAPI: RecordingBrightnessAPI(displays: []))
+        #expect(restored.dayLevel == 0.8)
+        #expect(restored.nightLevel == 0.2)
+    }
+
+    @Test
     func brightnessClampsToDisplayRange() {
         #expect(BrightnessController.clamped(-0.5) == 0)
         #expect(BrightnessController.clamped(0.4) == 0.4)

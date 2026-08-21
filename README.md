@@ -1,42 +1,60 @@
 # Switchboard
 
-Switchboard is one menu-bar app for small Mac utilities. It presents each utility as a module, keeps its settings and permissions explicit, and records migrations so a replaced command or service can be restored safely.
+Switchboard is a menu-bar control center for 17 small Mac utilities. It keeps module ownership, existing settings, permissions, migrations, and recovery state explicit instead of silently taking over unrelated software.
 
 ## Current status
 
-- The target is **macOS 26 on Apple silicon**.
-- One Switchboard background agent runs the enabled schedules and module workers.
-- There are **17 ready modules** and no planned or pilot modules. Warm Corners uses a same-identity handoff, exact settings verification, hidden replacement-health check, recovery archives, and Trash-based retirement. Smart Wake core wake/network/display-lock behavior is ready; its privileged sleep guard remains in place and iMessage remains unresolved rather than being migrated.
-- The app bundles sanitized command payloads, macOS Services, and the Copy Path Finder Sync extension. Generic `LegacySchedulerMigration` retires only legacy LaunchAgents and exact cron entries, with recovery data and rollback. Kinetics separately retires its legacy login registration. There is no generic app-bundle retirement yet, so the existing Copy Path host app remains. Copy Path activates only its exact bundled extension identity and rolls back an immediate enable failure.
-- The repository does not auto-install local builds. There is no current public DMG or public release.
+- Target: macOS 26 on Apple silicon.
+- Runtime: one Switchboard background agent runs enabled scheduled jobs and workers.
+- Catalog: 17 ready Switchboard modules; no planned or pilot entries.
+- Verification: the current suite is **139 tests in 22 suites**.
+- Distribution: the Developer ID Application certificate for Team `Q2X7X86GYR` is available. The implemented updater verifies a GitHub manifest, expected team, and SHA-256 before installation. A release is public only when its notarized DMG and manifest are visible together on GitHub Releases.
 
-## Module catalog and boundaries
+## Product boundaries
 
-The catalog in `Sources/Switchboard/Resources/ModuleManifest.json` is the source of truth. It currently contains 17 ready modules and no planned or pilot modules. Warm Corners is connected through a production migration transaction: the signed compatibility bridge quiesces the old watcher, Switchboard imports and verifies the authoritative settings, the hidden replacement proves its watcher is running, and only then is the old app archived and moved to Trash. Settings are otherwise preserved by reusing the same identity and canonical state when possible, or by a module-specific migration; there is no universal settings importer.
+The ownership source of truth is [`Sources/Switchboard/Resources/ModuleManifest.json`](Sources/Switchboard/Resources/ModuleManifest.json). The 17 modules are:
 
-Switchboard owns one background agent, its bundled payloads, and its Services. Standalone products and their workers remain in their own app bundles and DMGs. Safari apps remain separate. Third-party utilities and general Apple Shortcuts are excluded; Switchboard does not absorb them.
-
-At login, Switchboard starts without opening a window. Every normal launch opens the control center; launching an already-running hidden instance also restores the menu-bar item and reinitializes enabled Warm Corners monitoring so a newly granted permission takes effect.
-
-| Category | Contents |
+| Group | Modules |
 |---|---|
-| Standalone products | Market, School, Tool Dashboard, Vitals, UsageQueue, ReleaseRadar, NutrientTracker, Psephos, Tax Simulator, Runway |
-| Separate Safari apps | ForceCopyPaste, NewTabLinks, YouTube Defaults |
-| Planned Switchboard modules | None |
+| Desktop Controls | Warm Corners, Kinetics, Audio Disconnect Guard, Quit on Close, Smart Wake, Mac Brightness |
+| Mail | Mail Assistant |
+| Files & Links | Copy Path, AutoInstall DMG, Copy Safari URL |
+| Local Data | Local Read Connectors, Memory System |
+| Agent Systems | Codex & System Improvement, Repository & Release Automation, NotebookLM Sync, Backup Coverage Audit, Advanced Commands |
 
-## Updates and release status
+These products stay outside Switchboard:
 
-The implemented update path discovers a real published GitHub release, downloads the signed update manifest and DMG, verifies the SHA-256 hash, runs the nested updater, and supports rollback from a verified recovery copy. This is an implemented local update mechanism, not a claim that a public release exists.
+- Market, School, Tool Dashboard, Vitals, UsageQueue, ReleaseRadar, NutrientTracker, Psephos, Tax Simulator, and Runway remain standalone products. Their workers remain in their own app bundles and DMGs.
+- ForceCopyPaste, NewTabLinks, and YouTube Defaults remain separate Safari apps and extensions.
+- Third-party utilities, maintained forks, and general Apple Shortcuts remain separate. The two Mac brightness shortcuts are the deliberate exception: Switchboard replaces them with native Mac Brightness behavior.
 
-The release script builds a Developer ID-signed, notarized, stapled DMG and publishes an immutable GitHub release only after verification. The Developer ID Application certificate for Team `Q2X7X86GYR` is locally available, and a disposable full nested-app Developer ID signing, secure-timestamp, and strict verification passed. The GitHub updater and release script are implemented, but notarization and publishing have not been run; no public DMG or release is available today. Public publication still requires notarization, Gatekeeper and privacy checks, and explicit release authorization.
+## First run and launch behavior
 
-The update manifest identifies the release and DMG, including the expected team and SHA-256 hash. The updater verifies those values before installing and keeps a verified recovery copy so it can roll back to the previous version if the update fails.
+1. A normal user launch opens the control center and presents setup/review when first-run work or legacy evidence exists.
+2. A login-item or background launch stays hidden; it starts the agent and enabled modules without opening a window.
+3. The review scans exact legacy components. Existing legacy state and settings win once, then the selected module records the import.
+4. One user confirmation starts the selected migration. The review lists every detected component and its `migrate`, `retain`, or `alreadyRetired` disposition.
+5. Permission onboarding proceeds component by component. Only the exact subject that performs the protected action is shown, and an administrator prompt appears only when the requested operation actually needs privilege.
 
-## Privacy and configuration boundary
+## Migration and recovery model
 
-Settings and module choices stay on this Mac. Local-read and account-connected modules remain read-only for the sources they expose. Credentials, browser profiles, runtime data, and private memory are never documentation or release inputs.
+Migration is serialized and journaled. One confirmation authorizes the selected review, while each module commits independently so one failed replacement cannot retire another module's old app. Command and Service activation is reversible. Legacy scheduler migration snapshots exact LaunchAgents or cron entries, quiesces them, verifies the replacement, and can restore the snapshot after an interrupted or failed transaction. Unresolved jobs remain active and visible as retained items; they are not hidden or silently removed.
 
-## Build, test, and self-test
+An old app is retired only when all of these checks pass: exact canonical path, expected identity and executable, trusted signature, verified recovery archive, and replacement capability health. Only then is the app moved to the operating system Trash. The verified archive remains the recovery source.
+
+Warm Corners uses a same-identity handoff and verifies settings, watcher health, login state, and rollback records before retirement. Kinetics preserves its existing preferences domain and keys, verifies its event tap and continuous-agent heartbeat, and retires its old login registration only after those checks pass. Mac Brightness preserves editable day and night levels in Switchboard; the old Shortcuts remain untouched because macOS does not expose their action values to the background migration.
+
+## Permissions
+
+Switchboard does not request blanket Full Disk Access. The onboarding list names the exact component:
+
+- Accessibility is attributed to Switchboard, the nested Kinetics companion, or the Quit-on-Close helper as appropriate.
+- Mail Assistant Full Disk Access belongs to its exact nested helper, not the outer app.
+- Local Read permissions belong to the permanent external command host that runs those commands.
+- App Management is requested only when a legacy app must be retired.
+- Finder extension and Safari Automation permissions are requested on demand.
+
+## Build and verify locally
 
 From the repository root:
 
@@ -46,8 +64,23 @@ swift test
 build/Switchboard.app/Contents/MacOS/Switchboard --self-test
 ```
 
-The test suite currently has **111 tests in 19 suites**. `./build.sh` creates a local app, including the signed nested Kinetics companion and an inert migration-only LoginLauncher bundle that is never registered, but does not install it. Installation uses the verified Developer ID path or updater transaction. The self-test validates the manifest, ownership boundaries, bundled commands and Services, runtime jobs, nested companion/helper identity, and migration inventories. The updater has its own focused test suite.
+The build produces a local app and does not install it. Installation and updates use the canonical app location and their verified transactions.
+
+## Updates and release workflow
+
+The update path discovers a published GitHub release, downloads its manifest and DMG, verifies the expected version, Developer ID team, and SHA-256, then hands off to the nested updater. A verified recovery copy enables rollback if installation fails.
+
+[`scripts/publish-release.sh`](scripts/publish-release.sh) is the release entry point. A public release requires Developer ID signing, hardened runtime, notarization and stapling, Gatekeeper checks, privacy and secret-scanning checks, the full test/self-test/migration checks, and explicit release authorization. The source tree alone is never evidence that an artifact was published.
+
+## Source map
+
+- App shell and launch policy: [`Sources/Switchboard/main.swift`](Sources/Switchboard/main.swift), [`Sources/Switchboard/AppDelegate.swift`](Sources/Switchboard/AppDelegate.swift), [`Sources/Switchboard/Views/`](Sources/Switchboard/Views/)
+- Module ownership and enabled state: [`Sources/Switchboard/Models/ModuleDefinition.swift`](Sources/Switchboard/Models/ModuleDefinition.swift), [`Sources/Switchboard/Models/ModuleStore.swift`](Sources/Switchboard/Models/ModuleStore.swift), [`Sources/Switchboard/Resources/ModuleManifest.json`](Sources/Switchboard/Resources/ModuleManifest.json)
+- Upgrade contract and scanner: [`Sources/Switchboard/Models/UpgradeMigrationContract.swift`](Sources/Switchboard/Models/UpgradeMigrationContract.swift), [`Sources/Switchboard/Resources/UpgradeMigrationContract.json`](Sources/Switchboard/Resources/UpgradeMigrationContract.json), [`Sources/Switchboard/Services/LegacyUpgradeScanner.swift`](Sources/Switchboard/Services/LegacyUpgradeScanner.swift)
+- Recovery and retirement: [`Sources/Switchboard/Services/LegacyAppRetirement.swift`](Sources/Switchboard/Services/LegacyAppRetirement.swift), [`Sources/Switchboard/Services/LegacySchedulerMigration.swift`](Sources/Switchboard/Services/LegacySchedulerMigration.swift), [`Sources/Switchboard/Services/OperationCoordinator.swift`](Sources/Switchboard/Services/OperationCoordinator.swift)
+- Permissions and updates: [`Sources/Switchboard/Services/PermissionOnboardingService.swift`](Sources/Switchboard/Services/PermissionOnboardingService.swift), [`Sources/Switchboard/Services/UpdateInstaller.swift`](Sources/Switchboard/Services/UpdateInstaller.swift), [`Sources/Switchboard/Services/GitHubUpdateService.swift`](Sources/Switchboard/Services/GitHubUpdateService.swift)
+- Tests: [`Tests/SwitchboardTests/`](Tests/SwitchboardTests/)
 
 ## License
 
-Switchboard source is public under the [MIT License](LICENSE). A public DMG and public release do not exist yet.
+Switchboard source is public under the [MIT License](LICENSE).

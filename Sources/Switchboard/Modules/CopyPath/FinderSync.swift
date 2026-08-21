@@ -69,6 +69,17 @@ struct CopyPathController {
         try run(["-e", "disable", "-i", Self.extensionIdentifier])
     }
 
+    func isEnabled(bundleURL: URL) -> Bool {
+        guard (try? validateCanonical(bundleURL)) != nil,
+              let result = try? commandRunner.run(
+                executable: Self.pluginkitPath,
+                arguments: ["-m", "-A", "-D", "-i", Self.extensionIdentifier]
+              ), result.succeeded else { return false }
+        return result.stdout.split(whereSeparator: \.isNewline).contains {
+            $0.contains(Self.extensionIdentifier) && $0.trimmingCharacters(in: .whitespaces).hasPrefix("+")
+        }
+    }
+
     private func validateCanonical(_ bundleURL: URL) throws {
         guard bundleURL.resolvingSymlinksInPath().standardizedFileURL == Self.canonicalAppURL else {
             throw CopyPathActivationError.nonCanonicalBundle(bundleURL)

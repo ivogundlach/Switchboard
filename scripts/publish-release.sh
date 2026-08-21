@@ -12,7 +12,8 @@ usage() {
     "Usage: scripts/publish-release.sh --version X.Y.Z --notary-profile NAME --publish" \
     "" \
     "Builds, Developer ID-signs, notarizes, audits, and publishes one immutable" \
-    "GitHub release containing Switchboard-X.Y.Z-macOS.dmg and Switchboard-update.json."
+    "GitHub release containing Switchboard-X.Y.Z-macOS.dmg and Switchboard-update.json." \
+    "The source checkout must be clean and exactly tagged vX.Y.Z."
 }
 
 version=""
@@ -56,6 +57,16 @@ for command in swift codesign hdiutil xcrun gh jq shasum ditto plutil; do
   command -v "$command" >/dev/null || { printf 'Required command is missing: %s\n' "$command" >&2; exit 4; }
 done
 gh auth status >/dev/null
+if ! git -C "$ROOT" diff --quiet || ! git -C "$ROOT" diff --cached --quiet \
+  || [[ -n "$(git -C "$ROOT" ls-files --others --exclude-standard)" ]]; then
+  printf 'Release checkout must be clean; build from the exact committed tag.\n' >&2
+  exit 5
+fi
+exact_tag="$(git -C "$ROOT" describe --tags --exact-match HEAD 2>/dev/null || true)"
+if [[ "$exact_tag" != "v$version" ]]; then
+  printf 'Release checkout must be exactly tagged v%s.\n' "$version" >&2
+  exit 5
+fi
 if gh release view "v$version" --repo "$REPOSITORY" >/dev/null 2>&1; then
   printf 'Release v%s already exists; refusing to replace an immutable release.\n' "$version" >&2
   exit 5
@@ -135,8 +146,21 @@ jq -n \
 jq -e '.schemaVersion == 1 and (.dmgSHA256 | test("^[0-9a-f]{64}$"))' "$manifest" >/dev/null
 
 notes="$release_root/release-notes.md"
-printf '# Switchboard %s\n\nSigned with Apple Developer ID, notarized, and verified for Apple silicon on macOS 26 or later.\n' "$version" >"$notes"
-gh release create "v$version" "$dmg" "$manifest" \
-  --repo "$REPOSITORY" --title "Switchboard $version" --notes-file "$notes" --latest
+printf '# Switchboard %s\n\nSigned with Apple Developer ID, notarized, and verified for Apple silicon on macOS 26 or later. First launch presents one review of detected legacy utilities and only the permissions required by selected modules.\n' "$version" >"$notes"
+
+# Keep an incomplete release hidden from update discovery. Publish only after
+# GitHub reports the exact immutable asset pair on the draft.
+gh release create "v$version" --repo "$REPOSITORY" \
+  --title "Switchboard $version" --notes-file "$notes" --draft
+gh release upload "v$version" "$dmg" "$manifest" --repo "$REPOSITORY"
+release_json="$(gh release view "v$version" --repo "$REPOSITORY" --json isDraft,tagName,assets)"
+jq -e --arg tag "v$version" --arg dmg "$dmg_name" '
+  .isDraft == true and .tagName == $tag and
+  ([.assets[].name] | sort) == ([$dmg, "Switchboard-update.json"] | sort)
+' <<<"$release_json" >/dev/null || {
+  printf 'Draft asset verification failed; the draft remains hidden for inspection.\n' >&2
+  exit 8
+}
+gh release edit "v$version" --repo "$REPOSITORY" --draft=false --latest
 
 printf 'Published https://github.com/%s/releases/tag/v%s\n' "$REPOSITORY" "$version"

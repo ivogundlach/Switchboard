@@ -218,6 +218,8 @@ final class KineticsLegacyLoginMigration {
         self.intentStore = intentStore
     }
 
+    var legacyStatus: KineticsLegacyLoginStatus { service.status }
+
     func enable(
         currentSelection: Set<String>,
         registerSharedAgent: () throws -> Void,
@@ -237,6 +239,33 @@ final class KineticsLegacyLoginMigration {
             validateCompanion: validateCompanion,
             persistSelection: persistSelection
         )
+    }
+
+    func retireLegacyLoginAfterHealthyReplacement(
+        currentSelection: Set<String>,
+        validateCompanion: () throws -> Void
+    ) throws {
+        guard currentSelection.contains(Self.moduleID) else {
+            throw KineticsLegacyLoginMigrationError.invalidIntent
+        }
+        try validateCompanion()
+        var intent = KineticsLegacyLoginIntent(state: .planned)
+        try intentStore.persist(intent)
+        intent.state = .unregistering
+        try intentStore.persist(intent)
+        let status = service.status
+        if status == .enabled || status == .requiresApproval {
+            do { try service.unregister() }
+            catch { throw KineticsLegacyLoginMigrationError.unregisterFailed(error.localizedDescription) }
+        }
+        guard service.status == .notRegistered || service.status == .notFound else {
+            throw KineticsLegacyLoginMigrationError.unregisterFailed("the service remains registered")
+        }
+        intent.state = .unregistered
+        try intentStore.persist(intent)
+        try validateCompanion()
+        intent.state = .completed
+        try intentStore.persist(intent)
     }
 
     @discardableResult

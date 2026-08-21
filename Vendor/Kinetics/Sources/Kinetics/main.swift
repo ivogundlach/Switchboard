@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import CoreFoundation
 import Darwin
 import Foundation
@@ -7,6 +8,17 @@ import KineticsCore
 @main
 struct KineticsEntry {
     static func main() {
+        if CommandLine.arguments.contains("--accessibility-status") {
+            let trusted = AXIsProcessTrusted()
+            print("{\"accessibilityTrusted\":\(trusted)}")
+            Darwin.exit(trusted ? 0 : 1)
+        }
+        if CommandLine.arguments.contains("--request-accessibility") {
+            let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
+            let trusted = AXIsProcessTrustedWithOptions(options)
+            print("{\"accessibilityTrusted\":\(trusted)}")
+            Darwin.exit(trusted ? 0 : 1)
+        }
         if CommandLine.arguments.contains("--diagnose") {
             KineticsDiagnostics.run()
             return

@@ -1,0 +1,208 @@
+{
+  "schemaVersion": 1,
+  "modules": [
+    {
+      "moduleID": "desktop.warm-corners",
+      "settingsPolicy": "legacyOnce",
+      "replacementHealth": "verified",
+      "legacyComponents": [
+        {"id":"warm-corners-app","displayName":"Warm Corners app","kind":"appBundle","disposition":"alreadyRetired","canonicalPath":"/Applications/Warm Corners.app","bundleID":"com.ivogundlach.WarmCorners","executableName":"WarmCorners"}
+      ],
+      "permissions": [
+        {"id":"warm-corners-accessibility","displayName":"Switchboard Accessibility","subject":"Switchboard","mechanism":"accessibilityHelper","subjectRelativePath":"Contents/MacOS/Switchboard","settingsURL":"x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility","detail":"Allow Switchboard to watch pointer movement for Warm Corners."}
+      ]
+    },
+    {
+      "moduleID": "desktop.kinetics",
+      "settingsPolicy": "legacyOnce",
+      "replacementHealth": "verified",
+      "legacyComponents": [
+        {"id":"kinetics-app","displayName":"Kinetics app","kind":"appBundle","disposition":"migrate","canonicalPath":"/Applications/Kinetics.app","bundleID":"com.ivogundlach.Kinetics","executableName":"Kinetics"}
+      ],
+      "permissions": [
+        {"id":"kinetics-accessibility","displayName":"Kinetics Accessibility","subject":"Kinetics companion","mechanism":"accessibilityHelper","subjectRelativePath":"Contents/Resources/Companions/Kinetics.app","settingsURL":"x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility","detail":"Allow the nested Kinetics companion to observe desktop switching and Dock events."},
+        {"id":"kinetics-app-management","displayName":"Kinetics app management","subject":"Switchboard","mechanism":"appManagementAttestation","settingsURL":"x-apple.systempreferences:com.apple.preference.security?Privacy_AppBundles","detail":"Confirm that Switchboard is the signed app managing the Kinetics migration."}
+      ]
+    },
+    {
+      "moduleID": "desktop.audio-guard",
+      "settingsPolicy": "legacyOnce",
+      "replacementHealth": "verified",
+      "legacyComponents": [
+        {"id":"audio-guard-launch-agent","displayName":"Audio Disconnect Guard LaunchAgent","kind":"launchAgent","disposition":"migrate","label":"com.ivogundlach.AudioDisconnectGuard"}
+      ],
+      "permissions": []
+    },
+    {
+      "moduleID": "desktop.quit-on-close",
+      "settingsPolicy": "legacyOnce",
+      "replacementHealth": "verified",
+      "legacyComponents": [
+        {"id":"quit-on-close-launch-agent","displayName":"Quit-on-Close LaunchAgent","kind":"launchAgent","disposition":"migrate","label":"com.ivogundlach.quit-on-close"},
+        {"id":"autoquit-launch-agent","displayName":"Autoquit LaunchAgent","kind":"launchAgent","disposition":"migrate","label":"com.ivogundlach.autoquit"},
+        {"id":"quit-login-helper-launch-agent","displayName":"Swift Quit Login Helper","kind":"launchAgent","disposition":"migrate","label":"onebadidea.Swift-Quit-LaunchAtLoginHelper"}
+      ],
+      "permissions": [
+        {"id":"quit-on-close-accessibility","displayName":"Quit-on-Close Accessibility","subject":"Quit-on-Close helper","mechanism":"accessibilityHelper","subjectRelativePath":"Contents/Resources/Helpers/quit-on-close","settingsURL":"x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility","detail":"Allow the Quit-on-Close helper to observe application windows so it can quit selected apps after their last window closes."}
+      ]
+    },
+    {
+      "moduleID": "desktop.smart-wake",
+      "settingsPolicy": "legacyOnce",
+      "replacementHealth": "verified",
+      "legacyComponents": [
+        {"id":"smart-wake-launch-agent","displayName":"Smart Wake LaunchAgent","kind":"launchAgent","disposition":"migrate","label":"com.user.smartwake"},
+        {"id":"smart-wake-discord-launch-agent","displayName":"Smart Wake Discord LaunchAgent","kind":"launchAgent","disposition":"migrate","label":"com.user.smartwake.discord"},
+        {"id":"smart-wake-discord-watcher-app","displayName":"Smart Wake Discord Watcher app","kind":"appBundle","disposition":"migrate","canonicalPath":"/Applications/Smart Wake Discord Watcher.app","bundleID":"com.ivo.smartwake.discord-watcher","executableName":"Smart Wake Discord Watcher"},
+        {"id":"smart-wake-command","displayName":"Smart Wake command family","kind":"command","disposition":"migrate"},
+        {"id":"smart-wake-imessage-launch-agent","displayName":"Smart Wake iMessage LaunchAgent","kind":"launchAgent","disposition":"retain","label":"com.user.smartwake.imessage"},
+        {"id":"smart-wake-sleep-guard-launch-agent","displayName":"Smart Wake sleep guard","kind":"launchAgent","disposition":"retain","label":"com.user.smartwake.sleep-guard"}
+      ],
+      "permissions": [
+        {"id":"smart-wake-app-management","displayName":"Smart Wake app management","subject":"Switchboard","mechanism":"appManagementAttestation","settingsURL":"x-apple.systempreferences:com.apple.preference.security?Privacy_AppBundles","detail":"Confirm that Switchboard is the signed app managing the Smart Wake Discord Watcher migration."}
+      ]
+    },
+    {
+      "moduleID": "desktop.brightness",
+      "settingsPolicy": "sharedCanonical",
+      "replacementHealth": "verified",
+      "legacyComponents": [
+        {"id":"mac-day-brightness-shortcut","displayName":"Set Mac Day Brightness","kind":"shortcut","disposition":"migrate"},
+        {"id":"mac-night-brightness-shortcut","displayName":"Set Mac Night brightness","kind":"shortcut","disposition":"migrate"}
+      ],
+      "permissions": []
+    },
+    {
+      "moduleID": "mail.assistant",
+      "settingsPolicy": "legacyOnce",
+      "replacementHealth": "verified",
+      "legacyComponents": [
+        {"id":"mail-assistant-launch-agent","displayName":"Mail Assistant LaunchAgent","kind":"launchAgent","disposition":"migrate","label":"com.ivogundlach.apple-mail-draft-runner"},
+        {"id":"mail-assistant-app","displayName":"MailAssistant app","kind":"appBundle","disposition":"migrate","canonicalPath":"/Applications/MailAssistant.app","bundleID":"com.ivo.mail-assistant","executableName":"mail-assistant-runner"},
+        {"id":"mail-assistant-command-family","displayName":"Apple Mail command family","kind":"command","disposition":"migrate"}
+      ],
+      "permissions": [
+        {"id":"mail-assistant-full-disk-access","displayName":"Mail Assistant Full Disk Access","subject":"MailAssistant app","mechanism":"fullDiskAccessHelper","subjectRelativePath":"Contents/Resources/Helpers/MailAssistant.app","settingsURL":"x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles","detail":"Allow the nested MailAssistant app to read the local Mail data needed to prepare drafts."},
+        {"id":"mail-assistant-app-management","displayName":"Mail Assistant app management","subject":"Switchboard","mechanism":"appManagementAttestation","settingsURL":"x-apple.systempreferences:com.apple.preference.security?Privacy_AppBundles","detail":"Confirm that Switchboard is the signed app managing the MailAssistant migration."}
+      ]
+    },
+    {
+      "moduleID": "files.copy-path",
+      "settingsPolicy": "legacyOnce",
+      "replacementHealth": "verified",
+      "legacyComponents": [
+        {"id":"copy-path-app","displayName":"CopyPath app","kind":"appBundle","disposition":"migrate","canonicalPath":"/Applications/CopyPath.app","bundleID":"com.ivo.CopyPath","executableName":"CopyPath"},
+        {"id":"copy-filepath-service","displayName":"Copy Filepath service","kind":"service","disposition":"migrate"}
+      ],
+      "permissions": [
+        {"id":"copy-path-finder-extension","displayName":"CopyPath Finder extension","subject":"CopyPath Finder extension","mechanism":"finderExtension","subjectRelativePath":"Contents/PlugIns/CopyPathFinderExt.appex","settingsURL":"x-apple.systempreferences:com.apple.preference.extensions?Extensions_Finder","detail":"Enable the signed CopyPath Finder extension so Finder can offer the Copy Path action."},
+        {"id":"copy-path-app-management","displayName":"CopyPath app management","subject":"Switchboard","mechanism":"appManagementAttestation","settingsURL":"x-apple.systempreferences:com.apple.preference.security?Privacy_AppBundles","detail":"Confirm that Switchboard is the signed app managing the CopyPath migration."}
+      ]
+    },
+    {
+      "moduleID": "files.auto-install-dmg",
+      "settingsPolicy": "legacyOnce",
+      "replacementHealth": "verified",
+      "legacyComponents": [
+        {"id":"auto-install-dmg-app","displayName":"AutoInstall DMG app","kind":"appBundle","disposition":"migrate","canonicalPath":"/Applications/AutoInstall DMG.app","bundleID":"com.ivogundlach.autoinstalldmg","executableName":"AutoInstall DMG"}
+      ],
+      "permissions": [
+        {"id":"auto-install-dmg-app-management","displayName":"AutoInstall DMG app management","subject":"Switchboard","mechanism":"appManagementAttestation","settingsURL":"x-apple.systempreferences:com.apple.preference.security?Privacy_AppBundles","detail":"Confirm that Switchboard is the signed app managing the AutoInstall DMG migration."}
+      ]
+    },
+    {
+      "moduleID": "links.copy-safari-url",
+      "settingsPolicy": "legacyOnce",
+      "replacementHealth": "verified",
+      "legacyComponents": [
+        {"id":"copy-safari-url-service","displayName":"CopySafariURL service","kind":"service","disposition":"migrate"},
+        {"id":"copy-safari-url-command","displayName":"copy-safari-url command","kind":"command","disposition":"migrate"}
+      ],
+      "permissions": [
+        {"id":"copy-safari-url-runtime-prompt","displayName":"Safari Automation","subject":"Copy Safari URL service","mechanism":"runtimePrompt","settingsURL":"x-apple.systempreferences:com.apple.preference.security?Privacy_Automation","targetBundleID":"com.apple.Safari","detail":"When requested, allow the Copy Safari URL service to read the current page address from Safari."}
+      ]
+    },
+    {
+      "moduleID": "connectors.local-read",
+      "settingsPolicy": "sharedCanonical",
+      "replacementHealth": "verified",
+      "legacyComponents": [
+        {"id":"local-read-command-family","displayName":"Local Read connector commands","kind":"command","disposition":"migrate"}
+      ],
+      "permissions": [
+        {"id":"local-read-external-host","displayName":"Local Read command host","subject":"The app that invokes codex-read and its Python execution chain","mechanism":"externalHost","detail":"Run the connector from its permanent host (normally Codex). If macOS blocks a selected Safari, Screen Time, Calendar, Mail, Notes, or Reminders source, grant that host access to only that source, then rerun its read-only check. Switchboard cannot grant this permission for another app."}
+      ]
+    },
+    {
+      "moduleID": "systems.memory",
+      "settingsPolicy": "legacyOnce",
+      "replacementHealth": "verified",
+      "legacyComponents": [
+        {"id":"memory-corpus-backup","displayName":"Memory corpus backup","kind":"launchAgent","disposition":"migrate","label":"com.ivogundlach.memory-corpus-backup"},
+        {"id":"memory-health-weekly","displayName":"Memory weekly health","kind":"launchAgent","disposition":"migrate","label":"com.ivogundlach.memory-health-weekly"},
+        {"id":"memory-semantic-index","displayName":"Memory semantic index","kind":"launchAgent","disposition":"migrate","label":"com.ivogundlach.memory.semantic-index"},
+        {"id":"memory-transcript-distill","displayName":"Memory transcript distillation","kind":"launchAgent","disposition":"migrate","label":"com.ivogundlach.transcript-distill"},
+        {"id":"memory-corpus-backup-command","displayName":"Memory corpus backup command","kind":"command","disposition":"migrate"},
+        {"id":"memory-root-preference","displayName":"Memory root preference","kind":"preference","disposition":"migrate","defaultsDomain":"com.ivogundlach.memory","defaultsKey":"root"},
+        {"id":"memory-graphify-semantic","displayName":"Memory semantic graphifier","kind":"launchAgent","disposition":"retain","label":"com.ivogundlach.memory.graphify.semantic"}
+      ],
+      "permissions": []
+    },
+    {
+      "moduleID": "systems.codex-improvement",
+      "settingsPolicy": "legacyOnce",
+      "replacementHealth": "verified",
+      "legacyComponents": [
+        {"id":"codex-mirror-sync","displayName":"Codex mirror sync","kind":"launchAgent","disposition":"migrate","label":"com.ivogundlach.codex-mirror-sync"},
+        {"id":"weekly-system-improvement","displayName":"Weekly system improvement","kind":"launchAgent","disposition":"migrate","label":"com.ivogundlach.weekly-system-improvement"},
+        {"id":"codex-mirror-sync-command","displayName":"Codex mirror sync command","kind":"command","disposition":"migrate"},
+        {"id":"weekly-system-improvement-command","displayName":"Weekly system improvement command","kind":"command","disposition":"migrate"},
+        {"id":"claude-window-keeper","displayName":"Claude window keeper","kind":"launchAgent","disposition":"retain","label":"com.ivogundlach.claude-window-keeper"}
+      ],
+      "permissions": []
+    },
+    {
+      "moduleID": "systems.repository-release",
+      "settingsPolicy": "legacyOnce",
+      "replacementHealth": "verified",
+      "legacyComponents": [
+        {"id":"app-repo-sync","displayName":"App repository sync","kind":"launchAgent","disposition":"migrate","label":"com.ivogundlach.app-repo-sync"},
+        {"id":"personal-repo-sync","displayName":"Personal repository sync","kind":"launchAgent","disposition":"migrate","label":"com.ivogundlach.personal-repo-sync"},
+        {"id":"public-toolkit-publish","displayName":"Public toolkit publish","kind":"launchAgent","disposition":"retain","label":"com.ivogundlach.public-toolkit-publish"},
+        {"id":"repository-release-command-family","displayName":"Repository release command family","kind":"command","disposition":"migrate"}
+      ],
+      "permissions": []
+    },
+    {
+      "moduleID": "systems.notebooklm",
+      "settingsPolicy": "legacyOnce",
+      "replacementHealth": "verified",
+      "legacyComponents": [
+        {"id":"notebooklm-sync","displayName":"NotebookLM sync","kind":"launchAgent","disposition":"migrate","label":"com.ivo.notebooklm-sync"},
+        {"id":"notebooklm-auth-refresh","displayName":"NotebookLM auth refresh","kind":"launchAgent","disposition":"migrate","label":"com.ivo.notebooklm-auth-refresh"},
+        {"id":"notebooklm-sync-command","displayName":"NotebookLM sync command","kind":"command","disposition":"migrate"}
+      ],
+      "permissions": []
+    },
+    {
+      "moduleID": "systems.backup-audit",
+      "settingsPolicy": "legacyOnce",
+      "replacementHealth": "verified",
+      "legacyComponents": [
+        {"id":"backup-coverage-audit-cron","displayName":"Backup coverage audit cron","kind":"cron","disposition":"migrate","label":"cron:backup-coverage-audit"},
+        {"id":"backup-coverage-audit-command","displayName":"Backup coverage audit command","kind":"command","disposition":"migrate"}
+      ],
+      "permissions": []
+    },
+    {
+      "moduleID": "systems.advanced-commands",
+      "settingsPolicy": "sharedCanonical",
+      "replacementHealth": "verified",
+      "legacyComponents": [
+        {"id":"advanced-command-family","displayName":"Advanced first-party command family","kind":"command","disposition":"migrate"},
+        {"id":"advanced-shortcuts-evidence","displayName":"General Apple Shortcuts evidence","kind":"shortcut","disposition":"retain"}
+      ],
+      "permissions": []
+    }
+  ]
+}

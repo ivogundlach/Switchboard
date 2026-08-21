@@ -5,12 +5,17 @@ enum SelfTest {
         guard let manifestURL = Bundle.main.url(forResource: "ModuleManifest", withExtension: "json"),
               let contractURL = Bundle.main.url(forResource: "WarmCornersMigrationContract", withExtension: "json"),
               let baselineURL = Bundle.main.url(forResource: "InventoryBaseline", withExtension: "json"),
-              let runtimeURL = Bundle.main.url(forResource: "RuntimeManifest", withExtension: "json") else {
+              let runtimeURL = Bundle.main.url(forResource: "RuntimeManifest", withExtension: "json"),
+              let upgradeContractURL = Bundle.main.url(forResource: "UpgradeMigrationContract", withExtension: "json") else {
             throw SelfTestError.missingResource
         }
 
         let manifest = try JSONDecoder().decode(ModuleManifest.self, from: Data(contentsOf: manifestURL))
         try ManifestValidator.validate(manifest)
+        _ = try UpgradeMigrationContract.load(
+            from: upgradeContractURL,
+            moduleIDs: Set(manifest.modules.map(\.id))
+        )
         guard let smartWake = manifest.modules.first(where: { $0.id == "desktop.smart-wake" }),
               smartWake.availability == .ready,
               smartWake.legacyLabels == ["com.user.smartwake", "com.user.smartwake.discord"] else {

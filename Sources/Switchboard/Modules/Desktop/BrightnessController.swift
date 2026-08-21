@@ -1,6 +1,7 @@
 import CoreGraphics
 import Darwin
 import Foundation
+import Observation
 
 enum BrightnessResult: Equatable {
     case applied(level: Double, displayCount: Int)
@@ -13,19 +14,29 @@ protocol BrightnessDisplayAPI {
 }
 
 /// Controls all active displays through macOS's native display service.
+@Observable
 final class BrightnessController {
-    let dayLevel: Double
-    let nightLevel: Double
+    private static let dayLevelKey = "switchboard.brightness.day-level"
+    private static let nightLevelKey = "switchboard.brightness.night-level"
+
+    private(set) var dayLevel: Double
+    private(set) var nightLevel: Double
     private let displayAPI: BrightnessDisplayAPI
+    @ObservationIgnored
+    private let defaults: UserDefaults
     private(set) var isRunning = false
 
     init(
-        dayLevel: Double = 1.0,
-        nightLevel: Double = 0.3,
+        dayLevel: Double? = nil,
+        nightLevel: Double? = nil,
+        defaults: UserDefaults = .standard,
         displayAPI: BrightnessDisplayAPI = DynamicBrightnessDisplayAPI()
     ) {
-        self.dayLevel = Self.clamped(dayLevel)
-        self.nightLevel = Self.clamped(nightLevel)
+        self.defaults = defaults
+        let savedDay = defaults.object(forKey: Self.dayLevelKey) as? Double
+        let savedNight = defaults.object(forKey: Self.nightLevelKey) as? Double
+        self.dayLevel = Self.clamped(dayLevel ?? savedDay ?? 1.0)
+        self.nightLevel = Self.clamped(nightLevel ?? savedNight ?? 0.3)
         self.displayAPI = displayAPI
     }
 
@@ -36,6 +47,16 @@ final class BrightnessController {
     static func clamped(_ value: Double) -> Double {
         guard value.isFinite else { return value.sign == .minus ? 0 : 1 }
         return min(1, max(0, value))
+    }
+
+    func setDayLevel(_ value: Double) {
+        dayLevel = Self.clamped(value)
+        defaults.set(dayLevel, forKey: Self.dayLevelKey)
+    }
+
+    func setNightLevel(_ value: Double) {
+        nightLevel = Self.clamped(value)
+        defaults.set(nightLevel, forKey: Self.nightLevelKey)
     }
 
     @discardableResult

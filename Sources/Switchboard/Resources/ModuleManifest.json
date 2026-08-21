@@ -78,7 +78,7 @@
       "permissionCategories": [],
       "legacyLabels": [],
       "legacyBundleIDs": [],
-      "configKeys": ["day brightness", "night brightness", "schedule"]
+      "configKeys": ["day brightness", "night brightness"]
     },
     {
       "id": "mail.assistant",

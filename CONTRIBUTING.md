@@ -1,8 +1,8 @@
 # Contributing to Switchboard
 
-Switchboard is a public MIT project for **macOS 26 on Apple silicon**. The catalog contains ready modules and no planned entries.
+Switchboard is a public MIT project for macOS 26 on Apple silicon. The catalog has 17 ready modules and one background agent.
 
-## Before you start
+## Before opening a change
 
 From the repository root, run:
 
@@ -12,22 +12,35 @@ swift test
 build/Switchboard.app/Contents/MacOS/Switchboard --self-test
 ```
 
-The suite currently reports **111 tests in 19 suites**. The build makes a local, non-installed app, including the signed nested Kinetics companion and inert migration helper. A signed local installation and Warm Corners migration verification have also passed. `scripts/publish-release.sh` is implemented, and the Developer ID certificate is available, but notarization and public release publishing have not been run; do not add ad-hoc signing or an install step to the normal build.
+The current verification record is **139 tests in 22 suites**. The build creates a local, non-installed app. Do not add an install step to the normal build.
 
 ## Ownership boundary
 
-The 17 ready modules are Warm Corners, Kinetics, Audio Disconnect Guard, Quit on Close, Mac Brightness, Smart Wake core wake/network/display-lock behavior, Mail Assistant, AutoInstall DMG, Copy Safari URL, Copy Path, Local Read Connectors, Memory System, Codex & System Improvement, Repository & Release Automation, NotebookLM Sync, Backup Coverage Audit, and Advanced Commands. Warm Corners has passed its verified migration. Smart Wake's privileged sleep guard remains in place, and its unresolved iMessage path is not migrated.
+The manifest in `Sources/Switchboard/Resources/ModuleManifest.json` is the source of truth for the 17 modules. Standalone products and their workers remain in their own bundles and DMGs. Safari apps remain separate. Third-party tools, forks, and general Apple Shortcuts remain separate; the two Mac brightness shortcuts are replaced by native Switchboard behavior.
 
-Switchboard has one background agent. It owns sanitized bundled command payloads and macOS Services. Generic command, service, and scheduler migration is recoverable and supports rollback; it does not delete legacy apps. Warm Corners specifically archives and moves its bridge app to Trash only after verified health.
+Preserve these migration rules when changing code:
 
-Standalone products and their workers stay in their own app bundles and DMGs. Safari apps stay separate. Third-party utilities and general Apple Shortcuts remain outside Switchboard.
+- Normal launches show setup/review; login/background launches stay hidden.
+- Existing legacy settings/state win once, followed by one user confirmation.
+- The upgrade contract is per component: `migrate`, `retain`, or `alreadyRetired`.
+- Permission onboarding is progressive and exact. Do not add blanket Full Disk Access. Attribute Accessibility to the actor that needs it; Mail Assistant FDA belongs to its exact nested helper; Local Read permissions belong to its permanent external command host; App Management appears only for old-app retirement.
+- Administrator prompts happen only at the privileged action.
+- Command and Service activation is reversible; scheduler migration is recoverable; unresolved jobs stay active and visible.
+- Retire old apps only after exact path and identity checks, a verified archive, and replacement capability health; then move them to Trash.
+- Kinetics keeps its existing preferences domain and keys and proves its event tap and agent heartbeat before retiring the old login registration.
 
-## Updates and releases
+## Pull requests and issues
 
-The update implementation discovers a published GitHub release, downloads and verifies its manifest and DMG hash, invokes the nested updater, and can roll back from a verified recovery copy. `scripts/publish-release.sh` is implemented and requires Developer ID signing and notarization. Notarization and public release publishing have not been run; there is currently no public DMG or public release.
+Keep changes narrow and describe the user-visible effect. Include commands run and their results. Add or update focused tests when behavior or a safety gate changes. Do not include secrets, personal paths, account names, local usernames, private settings, or copied runtime data in issues, pull requests, logs, or screenshots.
 
-## Issues and pull requests
+## Release contributions
 
-Open an issue for a reproducible problem. Include the macOS version, Apple-silicon status, module and availability state, exact reproduction steps, and relevant self-test output. Do not include secrets, personal paths, private account data, or copied runtime data.
+The release entry point is `scripts/publish-release.sh`. The updater verifies the GitHub manifest, Developer ID Team `Q2X7X86GYR`, and SHA-256 before installation and retains a recovery copy for rollback. Notarization, stapling, Gatekeeper, privacy checks, and explicit authorization are required before publication. A release is public only when its verified assets are visible together on GitHub Releases.
 
-Pull requests should be narrow, explain the user-visible effect, preserve ownership boundaries, and include commands run and their results. Do not claim a public release exists.
+## Source map
+
+- App shell and launch policy: `Sources/Switchboard/main.swift`, `Sources/Switchboard/AppDelegate.swift`, `Sources/Switchboard/Views/`
+- Catalog and state: `Sources/Switchboard/Models/`, `Sources/Switchboard/Resources/ModuleManifest.json`
+- Migration and permissions: `Sources/Switchboard/Services/LegacyUpgradeScanner.swift`, `Sources/Switchboard/Models/UpgradeMigrationContract.swift`, `Sources/Switchboard/Services/PermissionOnboardingService.swift`
+- Recovery and retirement: `Sources/Switchboard/Services/LegacySchedulerMigration.swift`, `Sources/Switchboard/Services/LegacyAppRetirement.swift`, `Sources/Switchboard/Services/OperationCoordinator.swift`
+- Verification: `Sources/Switchboard/Services/SelfTest.swift`, `Tests/SwitchboardTests/`

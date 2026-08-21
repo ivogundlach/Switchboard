@@ -126,6 +126,43 @@ struct KineticsLegacyLoginMigrationTests {
         #expect(throws: KineticsLegacyLoginMigrationError.unsafeIntentPath) { try store.load() }
     }
 
+    @Test
+    func healthyReplacementRetiresLegacyLoginOnlyAfterSelectionExists() throws {
+        let root = try makeIntentRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = KineticsLegacyLoginIntentStore(applicationSupportURL: root)
+        let service = FakeKineticsLegacyLoginService(status: .enabled)
+        let migration = KineticsLegacyLoginMigration(service: service, intentStore: store)
+        var companionChecks = 0
+
+        try migration.retireLegacyLoginAfterHealthyReplacement(
+            currentSelection: [KineticsLegacyLoginMigration.moduleID],
+            validateCompanion: { companionChecks += 1 }
+        )
+
+        #expect(companionChecks == 2)
+        #expect(service.unregisterCalls == 1)
+        #expect(try store.load()?.state == .completed)
+    }
+
+    @Test
+    func legacyLoginIsNotTouchedBeforeHealthyReplacementSelection() throws {
+        let root = try makeIntentRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = KineticsLegacyLoginIntentStore(applicationSupportURL: root)
+        let service = FakeKineticsLegacyLoginService(status: .enabled)
+        let migration = KineticsLegacyLoginMigration(service: service, intentStore: store)
+
+        #expect(throws: KineticsLegacyLoginMigrationError.invalidIntent) {
+            try migration.retireLegacyLoginAfterHealthyReplacement(
+                currentSelection: [],
+                validateCompanion: {}
+            )
+        }
+        #expect(service.unregisterCalls == 0)
+        #expect(try store.load() == nil)
+    }
+
     private func makeIntentRoot() throws -> URL {
         let root = FileManager.default.temporaryDirectory.appending(
             path: "switchboard-kinetics-migration-\(UUID().uuidString)",

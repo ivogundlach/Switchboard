@@ -127,7 +127,7 @@ if [[ "${INSTALL:-0}" == "1" ]]; then
     echo "Unexpected build path; refusing installation." >&2
     exit 3
   fi
-  echo "INSTALL=1 is intentionally blocked until the Warm Corners production migration gate is approved." >&2
+  echo "Direct development installation is disabled; use the verified Developer ID install or updater transaction." >&2
   exit 4
 fi
 

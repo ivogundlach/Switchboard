@@ -2,7 +2,7 @@
 
 ## Supported status
 
-Switchboard is an unreleased project with ready modules and no planned modules. Kinetics runs as a signed nested companion under Switchboard's one background agent; its inert migration-only LoginLauncher bundle is included for exact SMAppService identity but is never registered or launched. Smart Wake's core behavior and Copy Path are ready, but there is no public DMG or production installation supported today.
+Switchboard is an unreleased project with ready modules and no planned modules. Kinetics runs as a signed nested companion under Switchboard's one background agent; its inert migration-only LoginLauncher bundle is included for exact SMAppService identity but is never registered or launched. Smart Wake's core behavior and Copy Path are ready. A signed local installation and Warm Corners migration verification have passed, but there is no public DMG or public release supported today.
 
 ## Reporting a vulnerability
 
@@ -15,7 +15,7 @@ Never post secrets, credentials, private settings, account data, personal paths,
 Treat these areas as security-sensitive and require focused review:
 
 - The single Switchboard background agent and its bundled command payloads and macOS Services.
-- Recoverable command, service, and scheduler migration, including rollback records. The current workflow does not delete legacy items.
+- Recoverable command, service, and scheduler migration, including rollback records. Generic migration does not delete legacy apps; Warm Corners specifically archives and moves its bridge app to Trash only after verified health.
 - GitHub release discovery, download, hash verification, nested updater, and rollback installer.
 - Privileged helpers, login registrations, and operations that can change installed or system state.
 - Local-read connectors, Apple Mail access, and manifest ownership checks.

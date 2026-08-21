@@ -6,13 +6,13 @@ Switchboard is one menu-bar app for small Mac utilities. It presents each utilit
 
 - The target is **macOS 26 on Apple silicon**.
 - One Switchboard background agent runs the enabled schedules and module workers.
-- There are **16 ready modules** and no planned modules. Warm Corners remains a pilot migration: its current migration is fail-closed and `INSTALL=1` remains blocked. Smart Wake core wake/network/display-lock behavior is ready; its privileged sleep guard remains in place and iMessage remains unresolved rather than being migrated.
+- There are **17 ready modules** and no planned or pilot modules. Warm Corners uses a same-identity handoff, exact settings verification, hidden replacement-health check, recovery archives, and Trash-based retirement. Smart Wake core wake/network/display-lock behavior is ready; its privileged sleep guard remains in place and iMessage remains unresolved rather than being migrated.
 - The app bundles sanitized command payloads, macOS Services, and the Copy Path Finder Sync extension. Generic `LegacySchedulerMigration` retires only legacy LaunchAgents and exact cron entries, with recovery data and rollback. Kinetics separately retires its legacy login registration. There is no generic app-bundle retirement yet, so the existing Copy Path host app remains. Copy Path activates only its exact bundled extension identity and rolls back an immediate enable failure.
-- A local build is not installed. There is no current public DMG or public release.
+- The repository does not auto-install local builds. There is no current public DMG or public release.
 
 ## Module catalog and boundaries
 
-The catalog in `Sources/Switchboard/Resources/ModuleManifest.json` is the source of truth. It currently contains 16 ready modules, no planned modules, and Warm Corners as a pilot migration. A reviewed Warm Corners bridge source and staged build exist in the separate Warm Corners source repository, but they are not deployed or connected to Switchboard, so the current migration remains fail-closed and `INSTALL=1` remains blocked. Settings are preserved by reusing the same identity and canonical state when possible, or by a module-specific migration; there is no universal settings importer. Module changes use their migration and status gates rather than silently replacing existing workers.
+The catalog in `Sources/Switchboard/Resources/ModuleManifest.json` is the source of truth. It currently contains 17 ready modules and no planned or pilot modules. Warm Corners is connected through a production migration transaction: the signed compatibility bridge quiesces the old watcher, Switchboard imports and verifies the authoritative settings, the hidden replacement proves its watcher is running, and only then is the old app archived and moved to Trash. Settings are otherwise preserved by reusing the same identity and canonical state when possible, or by a module-specific migration; there is no universal settings importer.
 
 Switchboard owns one background agent, its bundled payloads, and its Services. Standalone products and their workers remain in their own app bundles and DMGs. Safari apps remain separate. Third-party utilities and general Apple Shortcuts are excluded; Switchboard does not absorb them.
 
@@ -44,7 +44,7 @@ swift test
 build/Switchboard.app/Contents/MacOS/Switchboard --self-test
 ```
 
-The test suite currently has **105 tests in 17 suites**. `./build.sh` creates a local app, including the signed nested Kinetics companion and an inert migration-only LoginLauncher bundle that is never registered, but does not install it. The pinned local signing identity is available; notarization and publishing remain separate, unrun release steps. The self-test validates the manifest, ownership boundaries, bundled commands and Services, runtime jobs, nested companion/helper identity, and migration inventories. The updater has its own focused test suite.
+The test suite currently has **107 tests in 18 suites**. `./build.sh` creates a local app, including the signed nested Kinetics companion and an inert migration-only LoginLauncher bundle that is never registered, but does not install it. Installation uses the verified Developer ID path or updater transaction. The self-test validates the manifest, ownership boundaries, bundled commands and Services, runtime jobs, nested companion/helper identity, and migration inventories. The updater has its own focused test suite.
 
 ## License
 

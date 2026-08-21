@@ -45,6 +45,12 @@ final class ModuleStore {
     var selectedModuleID: String?
     var lastError: String?
 
+    var warmCornersRuntimeReady: Bool { warmCornerRuntime.isRunning }
+
+    func stopWarmCornersForMigrationRollback() {
+        warmCornerRuntime.stop()
+    }
+
     init() {
         do {
             let url = Bundle.main.url(forResource: "ModuleManifest", withExtension: "json")!
@@ -232,7 +238,9 @@ final class ModuleStore {
 
     private func enableWarmCorners(_ module: ModuleDefinition) async {
         do {
-            _ = try await warmCornersMigration.importLegacyIfNeeded()
+            if WarmCornersLiveMigration.completedTransactionID == nil {
+                _ = try await warmCornersMigration.importLegacyIfNeeded()
+            }
             enabledModuleIDs.insert(module.id)
             persistEnabledModules()
             warmCornerRuntime.start()

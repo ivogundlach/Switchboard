@@ -12,19 +12,19 @@ swift test
 build/Switchboard.app/Contents/MacOS/Switchboard --self-test
 ```
 
-The suite currently reports **105 tests in 17 suites**. The build makes a local, non-installed app, including the signed nested Kinetics companion and inert migration helper. The release script remains blocked until an Apple Developer ID certificate and the required notarization setup are available; do not add ad-hoc signing or an install step.
+The suite currently reports **107 tests in 18 suites**. The build makes a local, non-installed app, including the signed nested Kinetics companion and inert migration helper. A signed local installation and Warm Corners migration verification have also passed. `scripts/publish-release.sh` is implemented, and the Developer ID certificate is available, but notarization and public release publishing have not been run; do not add ad-hoc signing or an install step to the normal build.
 
 ## Ownership boundary
 
-Ready modules are Warm Corners, Kinetics, Audio Disconnect Guard, Quit on Close, Mac Brightness, Smart Wake core wake/network/display-lock behavior, Mail Assistant, AutoInstall DMG, Copy Safari URL, Copy Path, Local Read Connectors, Memory System, Codex & System Improvement, Repository & Release Automation, NotebookLM Sync, Backup Coverage Audit, and Advanced Commands. Smart Wake's privileged sleep guard remains in place, and its unresolved iMessage path is not migrated.
+The 17 ready modules are Warm Corners, Kinetics, Audio Disconnect Guard, Quit on Close, Mac Brightness, Smart Wake core wake/network/display-lock behavior, Mail Assistant, AutoInstall DMG, Copy Safari URL, Copy Path, Local Read Connectors, Memory System, Codex & System Improvement, Repository & Release Automation, NotebookLM Sync, Backup Coverage Audit, and Advanced Commands. Warm Corners has passed its verified migration. Smart Wake's privileged sleep guard remains in place, and its unresolved iMessage path is not migrated.
 
-Switchboard has one background agent. It owns sanitized bundled command payloads and macOS Services. Command, service, and scheduler migration is recoverable and supports rollback; current migration does not delete legacy items.
+Switchboard has one background agent. It owns sanitized bundled command payloads and macOS Services. Generic command, service, and scheduler migration is recoverable and supports rollback; it does not delete legacy apps. Warm Corners specifically archives and moves its bridge app to Trash only after verified health.
 
 Standalone products and their workers stay in their own app bundles and DMGs. Safari apps stay separate. Third-party utilities and general Apple Shortcuts remain outside Switchboard.
 
 ## Updates and releases
 
-The update implementation discovers a published GitHub release, downloads and verifies its manifest and DMG hash, invokes the nested updater, and can roll back from a verified recovery copy. The release workflow requires Developer ID signing and notarization. There is currently no public DMG or public release.
+The update implementation discovers a published GitHub release, downloads and verifies its manifest and DMG hash, invokes the nested updater, and can roll back from a verified recovery copy. `scripts/publish-release.sh` is implemented and requires Developer ID signing and notarization. Notarization and public release publishing have not been run; there is currently no public DMG or public release.
 
 ## Issues and pull requests
 

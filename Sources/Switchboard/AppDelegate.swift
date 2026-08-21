@@ -9,11 +9,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
-        createStatusItem()
-        Task { await store.resumePersistedModules() }
+        if !SwitchboardLaunchContext.backgroundOnly { createStatusItem() }
+        Task {
+            await store.resumePersistedModules()
+            try? WarmCornersLiveMigration.writeCurrentRuntimeHealth(warmRunning: store.warmCornersRuntimeReady)
+            if let migrationID = SwitchboardLaunchContext.warmMigrationID {
+                do {
+                    let ready = store.warmCornersRuntimeReady
+                    if !ready {
+                        try? WarmCornersLiveMigration.writeRuntimeHealth(migrationID, warmRunning: false)
+                        store.stopWarmCornersForMigrationRollback()
+                        try WarmCornersLiveMigration.rollback(migrationID)
+                        NSApp.terminate(nil)
+                        return
+                    }
+                    try WarmCornersLiveMigration.writeRuntimeHealth(migrationID, warmRunning: true)
+                    try WarmCornersLiveMigration.finalize(migrationID, warmRuntimeRunning: ready)
+                } catch {
+                    store.lastError = error.localizedDescription
+                    fputs("Switchboard Warm Corners retirement: FAIL — \(error.localizedDescription)\n", stderr)
+                    NSApp.terminate(nil)
+                }
+            }
+        }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        if SwitchboardLaunchContext.backgroundOnly { return true }
         showControlCenter()
         return true
     }
@@ -67,6 +89,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func showControlCenter() {
+        guard !SwitchboardLaunchContext.backgroundOnly else { return }
         if controlWindow == nil {
             let root = RootView(store: store).focusEffectDisabled()
             let controller = NSHostingController(rootView: root)

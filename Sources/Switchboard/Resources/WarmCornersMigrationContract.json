@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "componentID": "desktop.warm-corners",
-  "pilot": true,
+  "pilot": false,
   "legacy": {
     "bundleID": "com.ivogundlach.WarmCorners",
     "applicationPath": "/Applications/Warm Corners.app",
@@ -36,9 +36,9 @@
     "one sleep and wake cycle"
   ],
   "retirement": {
-    "availability": "future production migration only; the current pilot has no removal operation",
-    "userApplication": "move to Trash only after stabilization and explicit retirement enablement",
-    "restoreSource": "independently retained signed release archive, never Trash",
+    "availability": "production migration after verified replacement health",
+    "userApplication": "move to Trash only after the Switchboard watcher and imported settings verify",
+    "restoreSource": "owner-only verified original and bridge archives plus recoverable Trash copies",
     "personalState": "preserve"
   }
 }

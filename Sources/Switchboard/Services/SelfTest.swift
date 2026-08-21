@@ -79,7 +79,7 @@ enum SelfTest {
         )
         guard contract.schemaVersion == 1,
               contract.componentID == "desktop.warm-corners",
-              contract.pilot,
+              !contract.pilot,
               contract.legacy.bundleID == "com.ivogundlach.WarmCorners",
               contract.replacement.bundleID == "com.ivogundlach.switchboard",
               contract.replacement.moduleID == contract.componentID,
@@ -241,7 +241,7 @@ enum ManifestValidator {
         guard manifest.schemaVersion == 1 else { throw SelfTestError.unsupportedSchema }
         let moduleIDs = Set(manifest.modules.map(\.id))
         guard moduleIDs.count == manifest.modules.count else { throw SelfTestError.duplicateModuleID }
-        guard manifest.modules.filter({ $0.availability == .pilot }).map(\.id) == ["desktop.warm-corners"] else {
+        guard manifest.modules.filter({ $0.availability == .pilot }).isEmpty else {
             throw SelfTestError.invalidPilotSet
         }
 
@@ -373,8 +373,8 @@ enum SelfTestError: LocalizedError {
         case .duplicateModuleID: "The module manifest contains a duplicate ID."
         case .ownershipOverlap: "A standalone product was also assigned to Switchboard."
         case .safariOverlap: "A separate Safari app was also assigned to Switchboard."
-        case .invalidPilotSet: "Warm Corners must be the only pilot module."
-        case .invalidPilotContract: "The Warm Corners migration contract is invalid."
+        case .invalidPilotSet: "No pilot modules may remain in the production catalog."
+        case .invalidPilotContract: "The Warm Corners production migration contract is invalid."
         case .smartWakeReadiness: "Smart Wake core readiness or legacy scheduler boundaries are invalid."
         case .shortcutBoundary: "The Apple Shortcut boundary is invalid."
         case .duplicateOwnedItem: "A process, command, tool, or service has more than one owner."

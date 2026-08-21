@@ -4,7 +4,7 @@ Switchboard is a menu-bar app with a manifest-driven module catalog for macOS 26
 
 ## App shell and catalog
 
-`Sources/Switchboard/main.swift` handles self-test or starts the AppKit app. `AppDelegate.swift` owns setup. `Views/` owns the menu-bar interface. `Models/ModuleDefinition.swift` defines module ownership and availability; `Models/ModuleStore.swift` loads the manifest and routes every enable or relaunch through the migration/status gate.
+`Sources/Switchboard/main.swift` handles diagnostics, self-test, explicit background launch, or AppKit startup. `AppDelegate.swift` keeps login-item launches hidden, opens the control center for normal launches, and promotes a running hidden instance when the user launches Switchboard again. That promotion reinstalls enabled Warm Corners event monitors without changing settings. `Views/` owns the menu-bar interface. `Models/ModuleDefinition.swift` defines module ownership and availability; `Models/ModuleStore.swift` loads the manifest and routes every enable or relaunch through the migration/status gate.
 
 There are 17 ready modules and no planned or pilot modules. Warm Corners has a production same-identity handoff and recoverable retirement transaction. Kinetics is a signed nested companion at `Contents/Resources/Companions/Kinetics.app`; the Switchboard agent owns its one continuous runtime job and passes `--login`. A separate inert migration-only LoginLauncher bundle is placed at the outer app's `Contents/Library/LoginItems` path for exact SMAppService identity continuity, but it is never registered or launched. Smart Wake's privileged sleep guard remains separately retained because it consumes the existing user-state lease; iMessage remains unresolved and is not migrated.
 
@@ -26,4 +26,4 @@ The update services discover a published GitHub release, download the signed man
 
 ## Self-test
 
-`Services/SelfTest.swift` and the manifest validator check resources, schema, unique IDs, ready/planned availability, ownership boundaries, bundled commands and Services, runtime jobs, the nested Kinetics companion/helper, and migration inventories. The updater is verified by its focused tests. The current suite has **107 tests in 18 suites**.
+`Services/SelfTest.swift` and the manifest validator check resources, schema, unique IDs, ready/planned availability, ownership boundaries, bundled commands and Services, runtime jobs, the nested Kinetics companion/helper, and migration inventories. The updater is verified by its focused tests. The current suite has **111 tests in 19 suites**.

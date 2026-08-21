@@ -12,7 +12,7 @@ swift test
 build/Switchboard.app/Contents/MacOS/Switchboard --self-test
 ```
 
-The current test suite has **107 tests in 18 suites**. `./build.sh` creates the local app, including the signed nested Kinetics companion and inert migration helper, and deliberately does not install it. The Developer ID Application certificate for Team `Q2X7X86GYR` is locally available. A full nested-app Developer ID signing, secure-timestamp, strict verification, installation, and Warm Corners migration passed locally; this does not mean a public release has been notarized or published. Generic migration does not delete legacy apps; Warm Corners specifically archives and moves its bridge app to Trash only after verified health.
+The current test suite has **111 tests in 19 suites**. `./build.sh` creates the local app, including the signed nested Kinetics companion and inert migration helper, and deliberately does not install it. The Developer ID Application certificate for Team `Q2X7X86GYR` is locally available. A full nested-app Developer ID signing, secure-timestamp, strict verification, installation, and Warm Corners migration passed locally; this does not mean a public release has been notarized or published. Generic migration does not delete legacy apps; Warm Corners specifically archives and moves its bridge app to Trash only after verified health.
 
 ## Implemented update path
 

@@ -7,9 +7,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private var controlWindow: NSWindow?
 
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        let launchedAsLoginItem = NSAppleEventManager.shared().currentAppleEvent?
+            .paramDescriptor(forKeyword: keyAELaunchedAsLogInItem)?.booleanValue ?? false
+        SwitchboardLaunchContext.markLoginItemLaunch(launchedAsLoginItem)
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
-        if !SwitchboardLaunchContext.backgroundOnly { createStatusItem() }
+        if !SwitchboardLaunchContext.backgroundOnly {
+            createStatusItem()
+            showControlCenter()
+        }
         Task {
             await store.resumePersistedModules()
             try? WarmCornersLiveMigration.writeCurrentRuntimeHealth(warmRunning: store.warmCornersRuntimeReady)
@@ -35,7 +44,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
-        if SwitchboardLaunchContext.backgroundOnly { return true }
+        guard SwitchboardLaunchContext.warmMigrationID == nil else { return true }
+        SwitchboardLaunchContext.promoteForUserLaunch()
+        createStatusItem()
+        store.reinitializeWarmCornersForUserLaunch()
+        try? WarmCornersLiveMigration.writeCurrentRuntimeHealth(warmRunning: store.warmCornersRuntimeReady)
         showControlCenter()
         return true
     }
@@ -74,6 +87,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func createStatusItem() {
+        guard statusItem == nil else { return }
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.image = NSImage(systemSymbolName: "switch.2", accessibilityDescription: "Switchboard")
         item.button?.image?.isTemplate = true

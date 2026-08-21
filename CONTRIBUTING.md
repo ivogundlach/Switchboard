@@ -12,7 +12,7 @@ swift test
 build/Switchboard.app/Contents/MacOS/Switchboard --self-test
 ```
 
-The suite currently reports **107 tests in 18 suites**. The build makes a local, non-installed app, including the signed nested Kinetics companion and inert migration helper. A signed local installation and Warm Corners migration verification have also passed. `scripts/publish-release.sh` is implemented, and the Developer ID certificate is available, but notarization and public release publishing have not been run; do not add ad-hoc signing or an install step to the normal build.
+The suite currently reports **111 tests in 19 suites**. The build makes a local, non-installed app, including the signed nested Kinetics companion and inert migration helper. A signed local installation and Warm Corners migration verification have also passed. `scripts/publish-release.sh` is implemented, and the Developer ID certificate is available, but notarization and public release publishing have not been run; do not add ad-hoc signing or an install step to the normal build.
 
 ## Ownership boundary
 

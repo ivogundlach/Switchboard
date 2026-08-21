@@ -51,6 +51,13 @@ final class ModuleStore {
         warmCornerRuntime.stop()
     }
 
+    func reinitializeWarmCornersForUserLaunch() {
+        guard enabledModuleIDs.contains("desktop.warm-corners") else { return }
+        if !warmCornerRuntime.restart() {
+            lastError = "Warm Corners could not restart its pointer watcher. Check Switchboard's Accessibility permission."
+        }
+    }
+
     init() {
         do {
             let url = Bundle.main.url(forResource: "ModuleManifest", withExtension: "json")!

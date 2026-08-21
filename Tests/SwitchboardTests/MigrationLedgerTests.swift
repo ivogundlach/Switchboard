@@ -447,6 +447,7 @@ struct WarmCornerIndicatorTests {
 private final class FakeWarmCornerEventMonitor: WarmCornerEventMonitoring {
     var handles: WarmCornerMonitorHandles
     private(set) var removedCount = 0
+    private(set) var installCount = 0
 
     init(global: Bool, local: Bool) {
         handles = WarmCornerMonitorHandles(
@@ -455,7 +456,10 @@ private final class FakeWarmCornerEventMonitor: WarmCornerEventMonitoring {
         )
     }
 
-    func install(handler: @escaping () -> Void) -> WarmCornerMonitorHandles { handles }
+    func install(handler: @escaping () -> Void) -> WarmCornerMonitorHandles {
+        installCount += 1
+        return handles
+    }
     func remove(_ monitorHandle: Any) { removedCount += 1 }
 }
 
@@ -503,6 +507,22 @@ struct WarmCornerRuntimeLifecycleTests {
             #expect(monitor.removedCount == 1)
             defaults.cleanup()
         }
+    }
+
+    @Test @MainActor
+    func restartReplacesTheCompleteMonitorPair() {
+        let defaults = isolatedDefaults()
+        let monitor = FakeWarmCornerEventMonitor(global: true, local: true)
+        let runtime = WarmCornerRuntime(
+            settings: WarmCornerSettings(defaults: defaults.store),
+            eventMonitor: monitor
+        )
+        runtime.start()
+        #expect(runtime.restart())
+        #expect(runtime.isRunning)
+        #expect(monitor.installCount == 2)
+        #expect(monitor.removedCount == 2)
+        defaults.cleanup()
     }
 
     @MainActor

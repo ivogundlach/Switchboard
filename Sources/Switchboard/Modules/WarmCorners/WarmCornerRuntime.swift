@@ -47,6 +47,13 @@ final class WarmCornerRuntime {
         isRunning = false
     }
 
+    @discardableResult
+    func restart() -> Bool {
+        stop()
+        start()
+        return isRunning
+    }
+
     private func pointerMoved() {
         let location = NSEvent.mouseLocation
 

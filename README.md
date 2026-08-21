@@ -16,6 +16,8 @@ The catalog in `Sources/Switchboard/Resources/ModuleManifest.json` is the source
 
 Switchboard owns one background agent, its bundled payloads, and its Services. Standalone products and their workers remain in their own app bundles and DMGs. Safari apps remain separate. Third-party utilities and general Apple Shortcuts are excluded; Switchboard does not absorb them.
 
+At login, Switchboard starts without opening a window. Every normal launch opens the control center; launching an already-running hidden instance also restores the menu-bar item and reinitializes enabled Warm Corners monitoring so a newly granted permission takes effect.
+
 | Category | Contents |
 |---|---|
 | Standalone products | Market, School, Tool Dashboard, Vitals, UsageQueue, ReleaseRadar, NutrientTracker, Psephos, Tax Simulator, Runway |
@@ -44,7 +46,7 @@ swift test
 build/Switchboard.app/Contents/MacOS/Switchboard --self-test
 ```
 
-The test suite currently has **107 tests in 18 suites**. `./build.sh` creates a local app, including the signed nested Kinetics companion and an inert migration-only LoginLauncher bundle that is never registered, but does not install it. Installation uses the verified Developer ID path or updater transaction. The self-test validates the manifest, ownership boundaries, bundled commands and Services, runtime jobs, nested companion/helper identity, and migration inventories. The updater has its own focused test suite.
+The test suite currently has **111 tests in 19 suites**. `./build.sh` creates a local app, including the signed nested Kinetics companion and an inert migration-only LoginLauncher bundle that is never registered, but does not install it. Installation uses the verified Developer ID path or updater transaction. The self-test validates the manifest, ownership boundaries, bundled commands and Services, runtime jobs, nested companion/helper identity, and migration inventories. The updater has its own focused test suite.
 
 ## License
 

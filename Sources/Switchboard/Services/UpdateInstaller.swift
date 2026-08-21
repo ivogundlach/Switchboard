@@ -8,6 +8,7 @@ public enum UpdateInstallerConstants {
     public static let expectedBundleIdentifier = "com.ivogundlach.switchboard"
     public static let trustAnchorInfoPlistKey = "SwitchboardUpdateTeamIdentifier"
     public static let recoveryDirectoryName = "UpdateRecovery"
+    public static let expectedExecutableName = "Switchboard"
 }
 
 public enum UpdateInstallerError: Error, LocalizedError, Equatable, Sendable {
@@ -587,10 +588,16 @@ public struct UpdateCandidateValidator {
             throw UpdateInstallerError.bundleVersionMismatch(expected: plan.expectedVersion, actual: info.version)
         }
 
-        let architectureResult = try run(UpdateCommand(executable: "/usr/bin/lipo", arguments: ["-archs", candidate.path]))
+        let candidateExecutable = candidate
+            .appendingPathComponent("Contents/MacOS", isDirectory: true)
+            .appendingPathComponent(UpdateInstallerConstants.expectedExecutableName)
+        let architectureResult = try run(UpdateCommand(
+            executable: "/usr/bin/lipo",
+            arguments: ["-archs", candidateExecutable.path]
+        ))
         guard architectureResult.status == 0 else {
             throw UpdateInstallerError.commandFailed(
-                "/usr/bin/lipo -archs \(candidate.path)",
+                "/usr/bin/lipo -archs \(candidateExecutable.path)",
                 architectureResult.status,
                 architectureResult.combinedOutput
             )
@@ -1000,6 +1007,50 @@ public typealias UpdateInstallRecordStoreFactory = (
     URL,
     any UpdateInstallerFileSystem
 ) throws -> any UpdateInstallRecordStore
+
+/// Creates or repairs only Switchboard's own recovery directories. Existing
+/// links, foreign ownership, and non-directories remain hard failures.
+public enum UpdateRecoveryDirectory {
+    public static func prepare(
+        applicationSupportURL: URL,
+        fileManager: FileManager = .default
+    ) throws {
+        try validateOwnerOnlyDirectory(applicationSupportURL, fileManager: fileManager)
+        let switchboard = applicationSupportURL.appendingPathComponent("Switchboard", isDirectory: true)
+        let recovery = switchboard.appendingPathComponent(
+            UpdateInstallerConstants.recoveryDirectoryName,
+            isDirectory: true
+        )
+        try ensureOwnerOnlyDirectory(switchboard, fileManager: fileManager)
+        try ensureOwnerOnlyDirectory(recovery, fileManager: fileManager)
+    }
+
+    private static func ensureOwnerOnlyDirectory(_ url: URL, fileManager: FileManager) throws {
+        if !fileManager.fileExists(atPath: url.path) {
+            try fileManager.createDirectory(
+                at: url,
+                withIntermediateDirectories: false,
+                attributes: [.posixPermissions: 0o700]
+            )
+        }
+        let attributes = try fileManager.attributesOfItem(atPath: url.path)
+        guard attributes[.type] as? FileAttributeType == .typeDirectory,
+              (attributes[.ownerAccountID] as? NSNumber)?.uint32Value == getuid() else {
+            throw UpdateInstallerError.transactionRecordPathInvalid
+        }
+        try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.path)
+        try validateOwnerOnlyDirectory(url, fileManager: fileManager)
+    }
+
+    private static func validateOwnerOnlyDirectory(_ url: URL, fileManager: FileManager) throws {
+        let attributes = try fileManager.attributesOfItem(atPath: url.path)
+        guard attributes[.type] as? FileAttributeType == .typeDirectory,
+              (attributes[.ownerAccountID] as? NSNumber)?.uint32Value == getuid(),
+              ((attributes[.posixPermissions] as? NSNumber)?.uint16Value ?? 0o777) & 0o077 == 0 else {
+            throw UpdateInstallerError.transactionRecordPathInvalid
+        }
+    }
+}
 
 /// A recovered transaction and the canonical layout reconstructed from its UUID
 /// directory. The layout never comes from the persisted JSON record.
@@ -1445,6 +1496,28 @@ public final class UpdateInstallerTransaction {
         layout: UpdateInstallLayout,
         mountedRoot: URL?
     ) throws -> UpdateInstallRecord {
+        if [.mounted, .candidateVerified, .staged].contains(record.state) {
+            do {
+                try record.prepareIntent(next: .rollingBack, operation: "pre-replacement-cleanup")
+                try persist(record)
+                if let mountedRoot {
+                    record.prepareIntent(operation: "unmount-read-only")
+                    try persist(record)
+                    try effects.unmount(mountRoot: mountedRoot)
+                    record.clearMountedRoot()
+                }
+                try record.transition(to: .rolledBack, note: "pre-replacement cleanup completed")
+                record.clearIntent()
+                try persist(record)
+            } catch {
+                if record.state.canTransition(to: .failed) {
+                    try? record.transition(to: .failed, note: "pre-replacement cleanup failed")
+                    record.clearIntent()
+                    try? persist(record)
+                }
+            }
+            throw originalError
+        }
         guard record.state.canTransition(to: .rollingBack) else {
             if record.state.canTransition(to: .failed) {
                 try record.transition(to: .failed, note: "update failed")

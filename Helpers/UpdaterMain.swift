@@ -38,6 +38,7 @@ enum SwitchboardUpdaterMain {
             let runner = LocalUpdateCommandRunner()
             let fileSystem = LocalUpdateInstallerFileSystem()
             let effects = LocalUpdateInstallerEffects(fileSystem: fileSystem, commandRunner: runner)
+            try UpdateRecoveryDirectory.prepare(applicationSupportURL: applicationSupport)
             // Resolve every prior transaction before allocating a new UUID or
             // creating a new record. A malformed or failed recovery stops the
             // helper here, leaving the next launch to retry safely.

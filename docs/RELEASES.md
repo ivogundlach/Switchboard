@@ -2,9 +2,9 @@
 
 ## Status
 
-The current release target is `v0.2.1`, with **139 tests in 22 suites**. The Developer ID Application certificate for Team `Q2X7X86GYR` is available. Publication is complete only when the notarized, stapled DMG and its matching update manifest are visible together on GitHub Releases.
+The current release target is `v0.2.2`, with **141 tests in 22 suites**. The Developer ID Application certificate for Team `Q2X7X86GYR` is available. Publication is complete only when the notarized, stapled DMG and its matching update manifest are visible together on GitHub Releases.
 
-`v0.2.1` removes the conventional Applications shortcut from the image. That link conflicted with the updater's deliberate rule that a mounted update contain exactly one app and no symbolic links.
+`v0.2.2` removes the conventional Applications shortcut from the image, validates the exact app executable rather than the bundle directory, normalizes owned recovery folders to owner-only permissions, and cleans up pre-replacement failures without requiring a backup that cannot exist yet.
 
 ## Local verification
 

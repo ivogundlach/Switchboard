@@ -135,6 +135,10 @@ struct UpdateInstallerTests {
         let goodRunner = FixtureCommandRunner()
         let validator = UpdateCandidateValidator(fileSystem: fileSystem, commandRunner: goodRunner)
         #expect(try validator.validate(candidateUnder: root, plan: plan).teamIdentifier == "TEAM123")
+        #expect(goodRunner.commands.contains {
+            $0.executable == "/usr/bin/lipo" &&
+            $0.arguments == ["-archs", candidate.appendingPathComponent("Contents/MacOS/Switchboard").path]
+        })
 
         var wrongInfo = info
         wrongInfo = UpdateBundleInfo(bundleIdentifier: "com.example.other", version: info.version, architectures: info.architectures)
@@ -335,6 +339,76 @@ struct UpdateInstallerTests {
         #expect(effects.calls == ["mount", "stage", "backup", "unmount", "replace", "rollback"])
         #expect(store.records.contains { $0.pendingIntent?.operation == "rollback" && $0.state == .rollingBack })
         #expect(store.records.last?.state == .rolledBack)
+    }
+
+    @Test
+    func candidateValidationFailureUnmountsWithoutRequiringABackup() throws {
+        let anchor = try UpdateTrustAnchor(testTeamIdentifier: "TEAM123")
+        let plan = try UpdateInstallPlan(expectedVersion: "2.0.0", trustAnchor: anchor)
+        let root = URL(fileURLWithPath: "/private/tmp/mount")
+        let candidate = root.appendingPathComponent("Switchboard.app", isDirectory: true)
+        let fileSystem = FixtureFileSystem(
+            directories: [root, candidate],
+            children: [root: [candidate]],
+            bundleInfo: [candidate: UpdateBundleInfo(
+                bundleIdentifier: plan.expectedBundleIdentifier,
+                version: plan.expectedVersion
+            )]
+        )
+        let effects = FixtureEffects(mountRoot: root)
+        let store = FixtureRecordStore()
+        let transaction = UpdateInstallerTransaction(
+            effects: effects,
+            store: store,
+            validator: UpdateCandidateValidator(
+                fileSystem: fileSystem,
+                commandRunner: FixtureCommandRunner(architectures: "x86_64")
+            )
+        )
+        let identity = ParentIdentity(
+            pid: 509,
+            executableURL: UpdateInstallerConstants.canonicalExecutableURL,
+            startTime: Date(timeIntervalSince1970: 59)
+        )
+        let transactionID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+        let layout = UpdateInstallLayout(
+            targetURL: UpdateInstallerConstants.canonicalTargetURL,
+            stagingURL: URL(fileURLWithPath: "/Applications/.Switchboard.app.update-\(transactionID.uuidString)"),
+            backupURL: URL(fileURLWithPath: "/Applications/.Switchboard.app.backup-\(transactionID.uuidString)"),
+            recoveryURL: URL(fileURLWithPath: "/private/tmp/recovery/\(transactionID.uuidString)")
+        )
+
+        #expect(throws: UpdateInstallerError.self) {
+            try transaction.execute(
+                plan: plan,
+                imageURL: URL(fileURLWithPath: "/private/tmp/update.dmg"),
+                layout: layout,
+                parentIdentity: identity,
+                hashVerified: true
+            )
+        }
+        #expect(effects.calls == ["mount", "unmount"])
+        #expect(store.records.last?.state == .rolledBack)
+    }
+
+    @Test
+    func recoveryDirectoryPreparationNormalizesOwnedParents() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "switchboard-update-recovery-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root.path)
+        let switchboard = root.appendingPathComponent("Switchboard", isDirectory: true)
+        let recovery = switchboard.appendingPathComponent("UpdateRecovery", isDirectory: true)
+        try FileManager.default.createDirectory(at: recovery, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: recovery.path)
+
+        try UpdateRecoveryDirectory.prepare(applicationSupportURL: root)
+
+        let attributes = try FileManager.default.attributesOfItem(atPath: recovery.path)
+        #expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o700)
     }
 
     @Test
@@ -696,6 +770,7 @@ private struct FixtureFileSystem: UpdateInstallerFileSystem {
 }
 
 private final class FixtureCommandRunner: UpdateCommandRunner {
+    private(set) var commands: [UpdateCommand] = []
     let architectures: String
     let signature: UpdateCommandResult
     let teamOutput: String
@@ -720,6 +795,7 @@ private final class FixtureCommandRunner: UpdateCommandRunner {
     }
 
     func run(_ command: UpdateCommand) throws -> UpdateCommandResult {
+        commands.append(command)
         if command.executable == "/usr/bin/lipo" { return UpdateCommandResult(status: 0, stdout: architectures) }
         if command.executable == "/usr/sbin/spctl" { return gatekeeper }
         if command.arguments.contains("--verify") { return signature }

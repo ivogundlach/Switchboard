@@ -4,11 +4,11 @@ These boundaries describe the current product, not a promise that every catalog 
 
 ## Product and module boundary
 
-Switchboard is one menu-bar app for general-purpose Mac utilities with one background agent. Kinetics is now ready as a signed nested companion owned by one continuous Switchboard agent job. A separate inert migration-only LoginLauncher bundle preserves exact SMAppService identity for recovery, but is never registered or launched. Smart Wake core wake/network/display-lock behavior is ready alongside the existing ready modules. Its privileged sleep guard remains outside generic migration because it consumes the same user-state lease, while iMessage remains unresolved and is not migrated. Copy Path is now a bundled ready module.
+Switchboard is one menu-bar app for general-purpose Mac utilities with one background agent. There are 16 ready modules and no planned modules. Warm Corners remains a pilot migration whose current path is fail-closed and whose `INSTALL=1` path remains blocked. Kinetics is ready as a signed nested companion owned by one continuous Switchboard agent job. A separate inert migration-only LoginLauncher bundle preserves exact SMAppService identity for recovery, but is never registered or launched. Smart Wake core wake/network/display-lock behavior is ready; its privileged sleep guard remains outside generic migration because it consumes the same user-state lease, while iMessage remains unresolved and is not migrated. Copy Path is a bundled ready module.
 
 ## Bundled operations
 
-Sanitized command payloads, macOS Services, and the Copy Path Finder Sync extension ship inside the Switchboard bundle. Command, service, and scheduler migration records intent, verifies each replacement, and can roll back. Copy Path uses its exact bundled extension identity and reverses an immediate activation failure. The current migration path does not delete legacy items or the existing Copy Path host app.
+Sanitized command payloads, macOS Services, and the Copy Path Finder Sync extension ship inside the Switchboard bundle. Generic `LegacySchedulerMigration` retires only legacy LaunchAgents and exact cron entries, with recovery and rollback. Kinetics separately retires its legacy login registration. No generic app-bundle retirement exists yet, so the existing Copy Path host app remains. Copy Path uses its exact bundled extension identity and reverses an immediate activation failure. Settings are preserved through same-identity/canonical-state reuse or a module-specific migration, not a universal importer.
 
 ## Separate products and integrations
 
@@ -18,7 +18,7 @@ Market, School, Tool Dashboard, Vitals, UsageQueue, ReleaseRadar, NutrientTracke
 
 The implemented updater discovers real published GitHub releases, downloads the update manifest and DMG, verifies the SHA-256 hash, runs a nested updater, and supports rollback from a verified recovery copy.
 
-The release script requires Apple Developer ID signing, hardened runtime, notarization, stapling, and verification before publishing an immutable GitHub release. It is currently blocked because the required Developer ID certificate is absent. The local build is not installed, and no public DMG or public release exists.
+The release script requires Apple Developer ID signing, hardened runtime, notarization, stapling, and verification before publishing an immutable GitHub release. The Developer ID Application certificate for Team `Q2X7X86GYR` is locally available, and a disposable full nested-app Developer ID signing, secure-timestamp, and strict verification passed. The GitHub updater and release script are implemented, but notarization and publishing were not run. The local build is not installed, and no public DMG or public release exists. Public publication still requires notarization, Gatekeeper and privacy checks, and explicit release authorization.
 
 ## Source and license
 

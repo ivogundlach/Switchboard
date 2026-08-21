@@ -12,7 +12,7 @@ swift test
 build/Switchboard.app/Contents/MacOS/Switchboard --self-test
 ```
 
-The current test suite has **105 tests in 17 suites**. `./build.sh` creates the local app, including the signed nested Kinetics companion and inert migration helper, and deliberately does not install it. It remains blocked when the required Apple Developer ID certificate is absent.
+The current test suite has **105 tests in 17 suites**. `./build.sh` creates the local app, including the signed nested Kinetics companion and inert migration helper, and deliberately does not install it. The Developer ID Application certificate for Team `Q2X7X86GYR` is locally available. A disposable full nested-app Developer ID signing, secure-timestamp, and strict verification passed; this does not mean a public release has been notarized or published.
 
 ## Implemented update path
 
@@ -30,4 +30,4 @@ A public DMG may be produced only after all of these pass:
 6. Privacy and secret-scanning checks pass.
 7. The immutable GitHub release is created only after the preceding checks.
 
-The gate is blocked today because the required Developer ID certificate is absent. Do not describe a public DMG, public release, or update feed as available.
+The certificate gate is no longer blocked. Notarization and publishing have not been run, so do not describe a public DMG, public release, or update feed as available. Public publication additionally requires Gatekeeper and privacy checks plus explicit release authorization.

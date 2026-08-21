@@ -113,7 +113,8 @@ identifier="$(codesign -dv --verbose=4 "$app" 2>&1 | sed -n 's/^Identifier=//p')
 stage="$release_root/dmg-root"
 mkdir -p "$stage"
 ditto "$app" "$stage/Switchboard.app"
-ln -s /Applications "$stage/Applications"
+# The updater accepts exactly one app and rejects every symbolic link on the
+# mounted image, including the conventional Applications shortcut.
 dmg_name="Switchboard-$version-macOS.dmg"
 dmg="$release_root/$dmg_name"
 hdiutil create -volname Switchboard -srcfolder "$stage" -format UDZO -ov "$dmg" >/dev/null

@@ -234,7 +234,9 @@ def main() -> int:
         staging = temp / "dmg"
         staging.mkdir()
         run(["ditto", str(notarized_app), str(staging / notarized_app.name)])
-        os.symlink("/Applications", staging / "Applications")
+        # The updater accepts exactly one app and rejects every symbolic link
+        # on the mounted image. Keep release images compatible with that strict
+        # candidate-validation contract.
         temporary_dmg = temp / output_path.name
         run(
             [

@@ -46,7 +46,7 @@ The updater verifies the GitHub manifest, expected version, Developer ID Team `Q
 
 ## 8. Public release is a gated claim
 
-The current verification record is **142 tests in 22 suites**. The Developer ID certificate is available. Publication requires the release checks, privacy/secret checks, Gatekeeper evidence, and explicit authorization; source files alone never prove that a release occurred.
+The current verification record is **147 tests in 22 suites**. The Developer ID certificate is available. Publication requires the release checks, privacy/secret checks, Gatekeeper evidence, and explicit authorization; source files alone never prove that a release occurred.
 
 **Reason:** contributors and users must be able to distinguish implemented release machinery from an artifact that has actually been published.
 

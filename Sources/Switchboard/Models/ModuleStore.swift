@@ -14,6 +14,23 @@ enum UpgradeExecutionState: Equatable {
     case failed(String)
 }
 
+enum UpgradeAttentionTarget: Equatable {
+    case permissions
+    case moduleResult(String)
+
+    var scrollID: String {
+        switch self {
+        case .permissions: "upgrade-permissions"
+        case .moduleResult(let moduleID): "upgrade-result-\(moduleID)"
+        }
+    }
+}
+
+struct UpgradeAttentionEvent: Equatable {
+    let target: UpgradeAttentionTarget
+    let sequence: Int
+}
+
 @MainActor
 @Observable
 final class ModuleStore {
@@ -66,10 +83,13 @@ final class ModuleStore {
     private(set) var upgradePermissionReviews: [UpgradePermissionReview] = []
     private(set) var upgradeState: UpgradeExecutionState = .idle
     private(set) var upgradeResults: [String: String] = [:]
+    private(set) var upgradeAttention: UpgradeAttentionEvent?
     @ObservationIgnored
     private var upgradeHealthNonces: [String: String] = [:]
     @ObservationIgnored
     private var activeUpgradeLock: UpgradeExecutionLock?
+    @ObservationIgnored
+    private var upgradeAttentionSequence = 0
 
     var warmCornersRuntimeReady: Bool { warmCornerRuntime.isRunning }
 
@@ -185,7 +205,7 @@ final class ModuleStore {
         for module in manifest.modules where enabledModuleIDs.contains(module.id) {
             switch module.id {
             case "desktop.warm-corners":
-                await enableWarmCorners(module)
+                _ = await enableWarmCorners(module)
             case "desktop.audio-guard":
                 audioGuard.start()
             case "desktop.brightness":
@@ -255,7 +275,7 @@ final class ModuleStore {
         }
 
         if enabled {
-            Task { await enableModule(module) }
+            Task { _ = await enableModule(module) }
         } else {
             disableModule(module)
         }
@@ -314,22 +334,30 @@ final class ModuleStore {
         }
     }
 
-    private func persistEnabledModules() {
+    @discardableResult
+    private func persistEnabledModules(presentsError: Bool = true) -> String? {
         UserDefaults.standard.set(enabledModuleIDs.sorted(), forKey: Self.enabledKey)
         do {
             try ModuleSelectionFile.save(enabledModuleIDs, to: applicationSupportURL)
+            return nil
         } catch {
-            lastError = "Module selection could not be saved for the background agent: \(error.localizedDescription)"
+            let message = "Module selection could not be saved for the background agent: \(error.localizedDescription)"
+            if presentsError { lastError = message }
+            return message
         }
     }
 
-    private func synchronizeAgentRegistration() {
+    @discardableResult
+    private func synchronizeAgentRegistration(presentsError: Bool = true) -> String? {
         do {
             try agentRegistration.synchronize(
                 shouldRun: !enabledModuleIDs.isDisjoint(with: scheduledModuleIDs)
             )
+            return nil
         } catch {
-            lastError = "The Switchboard background agent could not be updated: \(error.localizedDescription)"
+            let message = "The Switchboard background agent could not be updated: \(error.localizedDescription)"
+            if presentsError { lastError = message }
+            return message
         }
     }
 
@@ -341,30 +369,39 @@ final class ModuleStore {
         return Set(runtime.jobs.map(\.moduleID))
     }
 
-    private func enableWarmCorners(_ module: ModuleDefinition) async {
+    private func enableWarmCorners(
+        _ module: ModuleDefinition,
+        presentsError: Bool = true
+    ) async -> String? {
         do {
             if WarmCornersLiveMigration.completedTransactionID == nil {
                 _ = try await warmCornersMigration.importLegacyIfNeeded()
             }
             enabledModuleIDs.insert(module.id)
-            persistEnabledModules()
+            if let error = persistEnabledModules(presentsError: false) {
+                throw ModuleActivationError.failed(error)
+            }
             warmCornerRuntime.start()
+            return nil
         } catch {
             enabledModuleIDs.remove(module.id)
-            persistEnabledModules()
+            _ = persistEnabledModules(presentsError: false)
             warmCornerRuntime.stop()
-            lastError = error.localizedDescription
+            let message = error.localizedDescription
+            if presentsError { lastError = message }
+            return message
         }
     }
 
-    private func enableModule(_ module: ModuleDefinition) async {
+    private func enableModule(
+        _ module: ModuleDefinition,
+        presentsError: Bool = true
+    ) async -> String? {
         if module.id == "desktop.warm-corners" {
-            await enableWarmCorners(module)
-            return
+            return await enableWarmCorners(module, presentsError: presentsError)
         }
         if module.id == "desktop.kinetics" {
-            await enableKinetics(module)
-            return
+            return await enableKinetics(module, presentsError: presentsError)
         }
 
         let commandNames = commands(for: module)
@@ -373,8 +410,9 @@ final class ModuleStore {
         let requiresCanonicalInstall = !commandNames.isEmpty || !serviceNames.isEmpty ||
             !module.legacyLabels.isEmpty || ownsScheduledJobs
         guard !requiresCanonicalInstall || CanonicalInstallGate.isCanonical() else {
-            lastError = "Install Switchboard in Applications before enabling \(module.name)."
-            return
+            let message = "Install Switchboard in Applications before enabling \(module.name)."
+            if presentsError { lastError = message }
+            return message
         }
 
         var commandsActivated = false
@@ -409,16 +447,21 @@ final class ModuleStore {
             }
             let safeLegacyLabels = migratableLegacyLabels(for: module)
             if !safeLegacyLabels.isEmpty {
-                _ = try LegacySchedulerMigration(
+                try await migrateLegacySchedulers(
                     moduleID: module.id,
-                    legacyLabels: safeLegacyLabels
-                ).migrate()
+                    labels: safeLegacyLabels
+                )
             }
 
             enabledModuleIDs.insert(module.id)
-            persistEnabledModules()
+            if let error = persistEnabledModules(presentsError: false) {
+                throw ModuleActivationError.failed(error)
+            }
             startLocalRuntime(for: module)
-            synchronizeAgentRegistration()
+            if let error = synchronizeAgentRegistration(presentsError: false) {
+                throw ModuleActivationError.failed(error)
+            }
+            return nil
         } catch {
             if servicesActivated {
                 try? serviceActivation.disable(
@@ -437,9 +480,12 @@ final class ModuleStore {
                 )
             }
             enabledModuleIDs.remove(module.id)
-            persistEnabledModules()
+            _ = persistEnabledModules(presentsError: false)
             stopLocalRuntime(for: module)
-            lastError = "\(module.name) was not enabled: \(error.localizedDescription)"
+            _ = synchronizeAgentRegistration(presentsError: false)
+            let message = "\(module.name) was not enabled: \(error.localizedDescription)"
+            if presentsError { lastError = message }
+            return message
         }
     }
 
@@ -559,20 +605,26 @@ final class ModuleStore {
         guard upgradeState == .confirmed || upgradeState == .waitingForPermissions else { return }
         guard !upgradePermissionReviews.contains(where: { $0.readiness.isBlocking }) else {
             upgradeState = .waitingForPermissions
+            requestUpgradeAttention(.permissions)
             return
         }
         Task { await performConfirmedUpgrade() }
     }
 
-    private func enableKinetics(_ module: ModuleDefinition) async {
+    private func enableKinetics(
+        _ module: ModuleDefinition,
+        presentsError: Bool = true
+    ) async -> String? {
         guard CanonicalInstallGate.isCanonical() else {
-            lastError = "Install Switchboard in Applications before enabling \(module.name)."
-            return
+            let message = "Install Switchboard in Applications before enabling \(module.name)."
+            if presentsError { lastError = message }
+            return message
         }
         kinetics.refresh(bundleURL: Bundle.main.bundleURL)
         guard kinetics.isReady else {
-            lastError = "\(module.name) was not enabled: \(kinetics.lastFailure ?? "the nested companion is unavailable")"
-            return
+            let message = "\(module.name) was not enabled: \(kinetics.lastFailure ?? "the nested companion is unavailable")"
+            if presentsError { lastError = message }
+            return message
         }
         do {
             try kineticsLegacyMigration.enable(
@@ -588,10 +640,15 @@ final class ModuleStore {
                     try self?.persistKineticsSelection(selection)
                 }
             )
-            synchronizeAgentRegistration()
+            if let error = synchronizeAgentRegistration(presentsError: false) {
+                throw ModuleActivationError.failed(error)
+            }
+            return nil
         } catch {
             kinetics.stop()
-            lastError = "\(module.name) was not enabled: \(error.localizedDescription)"
+            let message = "\(module.name) was not enabled: \(error.localizedDescription)"
+            if presentsError { lastError = message }
+            return message
         }
     }
 
@@ -688,6 +745,7 @@ final class ModuleStore {
         activeUpgradeLock = executionLock
         defer { activeUpgradeLock = nil }
         upgradeResults = [:]
+        upgradeAttention = nil
         var encounteredIssue = false
 
         for review in upgradePlan.modules where upgradeSelectedModuleIDs.contains(review.module.id) {
@@ -721,25 +779,33 @@ final class ModuleStore {
                         try kineticsHandoffStore.transition($0, to: .replacementSelected)
                     }
                 } else if !isEnabled(review.module) {
-                    await enableModule(review.module)
+                    if let activationError = await enableModule(
+                        review.module,
+                        presentsError: false
+                    ) {
+                        throw UpgradeExecutionError.activationFailed(activationError)
+                    }
                     guard isEnabled(review.module) else {
-                        throw UpgradeExecutionError.activationFailed(lastError ?? "the replacement did not enable")
+                        throw UpgradeExecutionError.activationFailed("the replacement did not enable")
                     }
                 } else {
                     // Existing Switchboard state does not suppress a legacy handoff.
                     let labels = migratableLegacyLabels(for: review.module)
                     if !labels.isEmpty {
-                        _ = try LegacySchedulerMigration(moduleID: review.module.id, legacyLabels: labels).migrate()
+                        try await migrateLegacySchedulers(
+                            moduleID: review.module.id,
+                            labels: labels
+                        )
                     }
                 }
 
                 upgradeState = .running(review.module.id, "Verifying \(review.module.name)")
                 guard await waitForReplacementHealth(review.module) else {
                     if review.module.id != KineticsCompanionController.moduleID {
-                        _ = try? LegacySchedulerMigration(
+                        await restoreLegacySchedulers(
                             moduleID: review.module.id,
-                            legacyLabels: migratableLegacyLabels(for: review.module)
-                        ).restoreLastMigration()
+                            labels: migratableLegacyLabels(for: review.module)
+                        )
                         disableModule(review.module)
                         try restoreLegacyApps(stoppedApps)
                         stoppedApps = []
@@ -777,6 +843,7 @@ final class ModuleStore {
                         retirementPending = true
                         encounteredIssue = true
                         upgradeResults[review.module.id] = "Replacement active; old app is disabled but still installed: \(error.localizedDescription)"
+                        requestUpgradeAttention(.moduleResult(review.module.id))
                     }
                 }
                 markUpgradeImported(review.module.id)
@@ -811,12 +878,39 @@ final class ModuleStore {
                 }
                 encounteredIssue = true
                 upgradeResults[review.module.id] = error.localizedDescription
+                requestUpgradeAttention(.moduleResult(review.module.id))
             }
         }
 
         refreshUpgradePlan()
         UserDefaults.standard.set(true, forKey: Self.setupCompleteKey)
         upgradeState = encounteredIssue ? .completedWithIssues : .completed
+    }
+
+    private func requestUpgradeAttention(_ target: UpgradeAttentionTarget) {
+        upgradeAttentionSequence += 1
+        upgradeAttention = UpgradeAttentionEvent(
+            target: target,
+            sequence: upgradeAttentionSequence
+        )
+    }
+
+    private func migrateLegacySchedulers(moduleID: String, labels: [String]) async throws {
+        try await Task.detached(priority: .userInitiated) {
+            _ = try LegacySchedulerMigration(
+                moduleID: moduleID,
+                legacyLabels: labels
+            ).migrate()
+        }.value
+    }
+
+    private func restoreLegacySchedulers(moduleID: String, labels: [String]) async {
+        _ = try? await Task.detached(priority: .userInitiated) {
+            try LegacySchedulerMigration(
+                moduleID: moduleID,
+                legacyLabels: labels
+            ).restoreLastMigration()
+        }.value
     }
 
     private func enableKineticsForUpgrade(_ module: ModuleDefinition) async throws {
@@ -829,7 +923,9 @@ final class ModuleStore {
             selection.insert(module.id)
             try persistKineticsSelection(selection)
         }
-        synchronizeAgentRegistration()
+        if let error = synchronizeAgentRegistration(presentsError: false) {
+            throw UpgradeExecutionError.activationFailed(error)
+        }
     }
 
     private func quiesceLegacyApps(
@@ -1000,6 +1096,16 @@ final class ModuleStore {
             return base.withMemoryRebound(to: UInt8.self, capacity: pointer.count) {
                 String(decodingCString: $0, as: UTF8.self)
             }
+        }
+    }
+}
+
+private enum ModuleActivationError: LocalizedError {
+    case failed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .failed(let message): message
         }
     }
 }

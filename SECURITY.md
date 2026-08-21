@@ -2,7 +2,7 @@
 
 ## Supported status
 
-Switchboard is public MIT source with 17 ready modules. The current verification record is **142 tests in 22 suites**. A Developer ID certificate for Team `Q2X7X86GYR` is available; a public DMG or release is valid only when notarization and release-gate evidence accompany it.
+Switchboard is public MIT source with 17 ready modules. The current verification record is **147 tests in 22 suites**. A Developer ID certificate for Team `Q2X7X86GYR` is available; a public DMG or release is valid only when notarization and release-gate evidence accompany it.
 
 ## Security boundaries
 

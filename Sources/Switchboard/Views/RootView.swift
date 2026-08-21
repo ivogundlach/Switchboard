@@ -182,17 +182,31 @@ private struct UpgradeReviewView: View {
 
             Divider()
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    ForEach(displayedModules) { review in
-                        upgradeModuleCard(review)
-                    }
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        ForEach(displayedModules) { review in
+                            upgradeModuleCard(review)
+                        }
 
-                    if store.upgradeState != .idle {
-                        permissionAndProgress
+                        if store.upgradeState != .idle {
+                            permissionAndProgress
+                                .id(UpgradeAttentionTarget.permissions.scrollID)
+                        }
+                    }
+                    .padding(22)
+                }
+                .onChange(of: store.upgradeAttention) { _, event in
+                    guard let event else { return }
+                    Task { @MainActor in
+                        await Task.yield()
+                        let anchor: UnitPoint = switch event.target {
+                        case .permissions: .top
+                        case .moduleResult: .center
+                        }
+                        proxy.scrollTo(event.target.scrollID, anchor: anchor)
                     }
                 }
-                .padding(22)
             }
 
             Divider()
@@ -248,6 +262,7 @@ private struct UpgradeReviewView: View {
                 Text(result)
                     .font(.caption)
                     .foregroundStyle(result.hasPrefix("Migrated") ? SwitchboardTheme.success : SwitchboardTheme.warning)
+                    .id(UpgradeAttentionTarget.moduleResult(review.module.id).scrollID)
             }
         }
         .padding(15)

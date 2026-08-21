@@ -2,9 +2,9 @@
 
 ## Status
 
-The current release target is `v0.2.3`, with **142 tests in 22 suites**. The Developer ID Application certificate for Team `Q2X7X86GYR` is available. Publication is complete only when the notarized, stapled DMG and its matching update manifest are visible together on GitHub Releases.
+The current release target is `v0.2.4`, with **147 tests in 22 suites**. The Developer ID Application certificate for Team `Q2X7X86GYR` is available. Publication is complete only when the notarized, stapled DMG and its matching update manifest are visible together on GitHub Releases.
 
-`v0.2.3` removes the conventional Applications shortcut from the image, validates the exact app executable rather than the bundle directory, normalizes owned recovery folders to owner-only permissions, cleans up pre-replacement failures without requiring a backup that cannot exist yet, and reads installed metadata directly so replacement verification cannot reuse a cached old version.
+`v0.2.4` waits for launchd to finish retiring or restoring an exact legacy job instead of treating its asynchronous state change as a failure. Onboarding permission blockers and module failures now move their exact inline explanation into view, and unrelated module alerts stay out of the migration sheet.
 
 ## Local verification
 

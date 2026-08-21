@@ -206,6 +206,8 @@ final class LegacySchedulerMigration {
     private let fileSystem: LegacySchedulerFileSystem
     private let commands: LegacySchedulerCommandRunning
     private let persistence: LegacySchedulerStatePersisting
+    private let launchctlVerificationAttempts: Int
+    private let launchctlVerificationDelay: () -> Void
 
     init(
         moduleID: String,
@@ -213,13 +215,19 @@ final class LegacySchedulerMigration {
         environment: LegacySchedulerMigrationEnvironment = .init(),
         fileSystem: LegacySchedulerFileSystem = LocalLegacySchedulerFileSystem(),
         commands: LegacySchedulerCommandRunning = LocalLegacySchedulerCommandRunner(),
-        persistence: LegacySchedulerStatePersisting? = nil
+        persistence: LegacySchedulerStatePersisting? = nil,
+        launchctlVerificationAttempts: Int = 51,
+        launchctlVerificationDelay: @escaping () -> Void = {
+            Thread.sleep(forTimeInterval: 0.1)
+        }
     ) {
         self.moduleID = moduleID
         self.labels = legacyLabels
         self.environment = environment
         self.fileSystem = fileSystem
         self.commands = commands
+        self.launchctlVerificationAttempts = max(1, launchctlVerificationAttempts)
+        self.launchctlVerificationDelay = launchctlVerificationDelay
         self.persistence = persistence ?? FileLegacySchedulerStateStore(
             fileSystem: fileSystem,
             fileURL: environment.applicationSupportDirectory
@@ -332,7 +340,8 @@ final class LegacySchedulerMigration {
             }
             if artifact.wasLoaded, try !isLoaded(artifact.label) {
                 let result = try runLaunchctl(arguments: ["bootstrap", "gui/\(environment.userID)", originalURL.path])
-                guard result.succeeded, try isLoaded(artifact.label) else {
+                guard result.succeeded,
+                      try waitForLoadedState(artifact.label, expectedLoaded: true) else {
                     throw LegacySchedulerMigrationError.rollbackFailed("could not reload \(artifact.label)")
                 }
             }
@@ -462,7 +471,7 @@ final class LegacySchedulerMigration {
                     throw LegacySchedulerMigrationError.commandFailed("launchctl bootout", result.status)
                 }
             }
-            guard try !isLoaded(snapshot.label) else {
+            guard try waitForLoadedState(snapshot.label, expectedLoaded: false) else {
                 throw LegacySchedulerMigrationError.verificationFailed("loaded launch agent \(snapshot.label)")
             }
             try persistence.persist(record)
@@ -526,7 +535,8 @@ final class LegacySchedulerMigration {
                         }
                         if snapshot.wasLoaded {
                             let result = try runLaunchctl(arguments: ["bootstrap", "gui/\(environment.userID)", originalURL.path])
-                            guard result.succeeded, try isLoaded(snapshot.label) else {
+                            guard result.succeeded,
+                                  try waitForLoadedState(snapshot.label, expectedLoaded: true) else {
                                 throw LegacySchedulerMigrationError.rollbackFailed("could not reload \(snapshot.label)")
                             }
                         }
@@ -583,6 +593,16 @@ final class LegacySchedulerMigration {
 
     private func isLoaded(_ label: String) throws -> Bool {
         try runLaunchctl(arguments: ["print", launchDomain(label)]).succeeded
+    }
+
+    private func waitForLoadedState(_ label: String, expectedLoaded: Bool) throws -> Bool {
+        for attempt in 0..<launchctlVerificationAttempts {
+            if try isLoaded(label) == expectedLoaded { return true }
+            if attempt + 1 < launchctlVerificationAttempts {
+                launchctlVerificationDelay()
+            }
+        }
+        return false
     }
 
     private func runLaunchctl(arguments: [String]) throws -> LegacySchedulerCommandResult {

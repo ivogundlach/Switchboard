@@ -12,7 +12,7 @@ swift test
 build/Switchboard.app/Contents/MacOS/Switchboard --self-test
 ```
 
-The current verification record is **142 tests in 22 suites**. The build creates a local, non-installed app. Do not add an install step to the normal build.
+The current verification record is **147 tests in 22 suites**. The build creates a local, non-installed app. Do not add an install step to the normal build.
 
 ## Ownership boundary
 

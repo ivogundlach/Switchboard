@@ -138,6 +138,173 @@ struct LegacySchedulerMigrationTests {
     }
 
     @Test
+    func delayedBootoutVerificationEventuallyCompletes() throws {
+        let fs = FakeFileSystem()
+        let commands = FakeCommands(bootoutVisiblePrintChecks: 2)
+        let persistence = RecordingPersistence()
+        let env = testEnvironment()
+        let original = env.homeDirectory.appending(path: "Library/LaunchAgents/com.example.job.plist")
+        let source = Data("plist bytes\n".utf8)
+        fs.files[original.path] = source
+        commands.loaded.insert("com.example.job")
+
+        let record = try LegacySchedulerMigration(
+            moduleID: "desktop.test",
+            legacyLabels: ["com.example.job"],
+            environment: env,
+            fileSystem: fs,
+            commands: commands,
+            persistence: persistence,
+            launchctlVerificationAttempts: 3,
+            launchctlVerificationDelay: {}
+        ).migrate()
+
+        #expect(record.state == .completed)
+        #expect(fs.files[original.path] == nil)
+        #expect(fs.moves.contains { $0.hasPrefix(original.path + "->") })
+        #expect(commands.executions.contains {
+            $0.executable == "/bin/launchctl" && $0.arguments == ["bootout", "gui/501/com.example.job"]
+        })
+        #expect(commands.executions.filter { $0.arguments.first == "print" }.count >= 3)
+    }
+
+    @Test
+    func bootoutVerificationTimeoutRollsBackCoherently() throws {
+        let fs = FakeFileSystem()
+        let commands = FakeCommands(bootoutVisiblePrintChecks: 10)
+        let persistence = RecordingPersistence()
+        let env = testEnvironment()
+        let original = env.homeDirectory.appending(path: "Library/LaunchAgents/com.example.job.plist")
+        let source = Data("plist bytes\n".utf8)
+        fs.files[original.path] = source
+        commands.loaded.insert("com.example.job")
+
+        #expect(throws: LegacySchedulerMigrationError.verificationFailed("loaded launch agent com.example.job")) {
+            try LegacySchedulerMigration(
+                moduleID: "desktop.test",
+                legacyLabels: ["com.example.job"],
+                environment: env,
+                fileSystem: fs,
+                commands: commands,
+                persistence: persistence,
+                launchctlVerificationAttempts: 3,
+                launchctlVerificationDelay: {}
+            ).migrate()
+        }
+        #expect(fs.files[original.path] == source)
+        #expect(commands.loaded.contains("com.example.job"))
+        #expect(commands.executions.contains {
+            $0.executable == "/bin/launchctl" && $0.arguments == ["bootout", "gui/501/com.example.job"]
+        })
+        #expect(persistence.records.contains { $0.events.contains { $0.state == .rollingBack } })
+        #expect(persistence.records.contains { $0.state == .failed })
+    }
+
+    @Test
+    func quitOnCloseLabelsTolerateDelayedLaunchdRemoval() throws {
+        let env = testEnvironment()
+        let labels = [
+            "com.ivogundlach.quit-on-close",
+            "com.ivogundlach.autoquit",
+            "onebadidea.Swift-Quit-LaunchAtLoginHelper",
+        ]
+
+        for label in labels {
+            let fs = FakeFileSystem()
+            let commands = FakeCommands(bootoutVisiblePrintChecks: 2)
+            let original = env.homeDirectory.appending(path: "Library/LaunchAgents/\(label).plist")
+            fs.files[original.path] = Data("\(label) plist\n".utf8)
+            commands.loaded.insert(label)
+
+            let record = try LegacySchedulerMigration(
+                moduleID: "desktop.quit-on-close",
+                legacyLabels: [label],
+                environment: env,
+                fileSystem: fs,
+                commands: commands,
+                persistence: RecordingPersistence(),
+                launchctlVerificationAttempts: 3,
+                launchctlVerificationDelay: {}
+            ).migrate()
+
+            #expect(record.state == .completed)
+            #expect(fs.files[original.path] == nil)
+            #expect(commands.executions.contains {
+                $0.executable == "/bin/launchctl" && $0.arguments == ["bootout", "gui/501/\(label)"]
+            })
+        }
+    }
+
+    @Test
+    func delayedBootstrapVerificationRestoresLoadedJob() throws {
+        let fs = FakeFileSystem()
+        let commands = FakeCommands(
+            cronReplacementFailureCount: 1,
+            bootstrapInvisiblePrintChecks: 2
+        )
+        let persistence = RecordingPersistence()
+        let env = testEnvironment()
+        let label = "com.example.job"
+        let original = env.homeDirectory.appending(path: "Library/LaunchAgents/\(label).plist")
+        let source = Data("plist bytes\n".utf8)
+        fs.files[original.path] = source
+        commands.loaded.insert(label)
+        commands.crontab = Data((LegacySchedulerMigration.backupAuditCronLine(homeDirectory: env.homeDirectory) + "\n").utf8)
+
+        #expect(throws: LegacySchedulerMigrationError.commandFailed("crontab replacement", 1)) {
+            try LegacySchedulerMigration(
+                moduleID: "desktop.test",
+                legacyLabels: [label, LegacySchedulerMigration.cronLabel],
+                environment: env,
+                fileSystem: fs,
+                commands: commands,
+                persistence: persistence,
+                launchctlVerificationAttempts: 3,
+                launchctlVerificationDelay: {}
+            ).migrate()
+        }
+        #expect(fs.files[original.path] == source)
+        #expect(commands.loaded.contains(label))
+        #expect(commands.executions.contains {
+            $0.executable == "/bin/launchctl" && $0.arguments == ["bootstrap", "gui/501", original.path]
+        })
+        #expect(persistence.records.contains { $0.state == .failed })
+    }
+
+    @Test
+    func bootstrapVerificationTimeoutLeavesRecoveryJournalOpen() throws {
+        let fs = FakeFileSystem()
+        let commands = FakeCommands(
+            cronReplacementFailureCount: 1,
+            bootstrapInvisiblePrintChecks: 10
+        )
+        let persistence = RecordingPersistence()
+        let env = testEnvironment()
+        let label = "com.example.job"
+        let original = env.homeDirectory.appending(path: "Library/LaunchAgents/\(label).plist")
+        let source = Data("plist bytes\n".utf8)
+        fs.files[original.path] = source
+        commands.loaded.insert(label)
+        commands.crontab = Data((LegacySchedulerMigration.backupAuditCronLine(homeDirectory: env.homeDirectory) + "\n").utf8)
+
+        #expect(throws: LegacySchedulerMigrationError.rollbackFailed("could not reload \(label)")) {
+            try LegacySchedulerMigration(
+                moduleID: "desktop.test",
+                legacyLabels: [label, LegacySchedulerMigration.cronLabel],
+                environment: env,
+                fileSystem: fs,
+                commands: commands,
+                persistence: persistence,
+                launchctlVerificationAttempts: 3,
+                launchctlVerificationDelay: {}
+            ).migrate()
+        }
+        #expect(fs.files[original.path] == source)
+        #expect(!commands.loaded.contains(label))
+        #expect(persistence.records.last?.state == .rollingBack)
+    }
+
+    @Test
     func rejectsSymlinkedLegacyPlistBeforeSnapshotMoveOrLaunchctl() {
         let fs = FakeFileSystem()
         let commands = FakeCommands()
@@ -216,10 +383,23 @@ private final class FakeCommands: LegacySchedulerCommandRunning {
     let order: SharedOrder
     var loaded = Set<String>()
     var crontab = Data()
-    let failCronReplacement: Bool
+    var remainingCronReplacementFailures: Int
+    let bootoutVisiblePrintChecks: Int
+    let bootstrapInvisiblePrintChecks: Int
+    var remainingBootoutVisiblePrintChecks = 0
+    var remainingBootstrapInvisiblePrintChecks = 0
 
-    init(failCronReplacement: Bool = false, order: SharedOrder = SharedOrder()) {
-        self.failCronReplacement = failCronReplacement
+    init(
+        failCronReplacement: Bool = false,
+        cronReplacementFailureCount: Int? = nil,
+        bootoutVisiblePrintChecks: Int = 0,
+        bootstrapInvisiblePrintChecks: Int = 0,
+        order: SharedOrder = SharedOrder()
+    ) {
+        remainingCronReplacementFailures = cronReplacementFailureCount
+            ?? (failCronReplacement ? .max : 0)
+        self.bootoutVisiblePrintChecks = bootoutVisiblePrintChecks
+        self.bootstrapInvisiblePrintChecks = bootstrapInvisiblePrintChecks
         self.order = order
     }
 
@@ -228,14 +408,38 @@ private final class FakeCommands: LegacySchedulerCommandRunning {
         order.values.append("cmd:\(executable):\(arguments.joined(separator: ","))")
         if executable == "/bin/launchctl" {
             let label = arguments.last?.split(separator: "/").last.map(String.init) ?? ""
-            if arguments.first == "print" { return .init(status: loaded.contains(label) ? 0 : 1, stdout: Data(), stderr: Data()) }
-            if arguments.first == "bootout" { loaded.remove(label); return .init(status: 0, stdout: Data(), stderr: Data()) }
-            if arguments.first == "bootstrap" { loaded.insert(label.replacingOccurrences(of: ".plist", with: "")); return .init(status: 0, stdout: Data(), stderr: Data()) }
+            if arguments.first == "print" {
+                if remainingBootstrapInvisiblePrintChecks > 0 {
+                    remainingBootstrapInvisiblePrintChecks -= 1
+                    if remainingBootstrapInvisiblePrintChecks == 0 { loaded.insert(label) }
+                    return .init(status: 1, stdout: Data(), stderr: Data())
+                }
+                if loaded.contains(label), remainingBootoutVisiblePrintChecks > 0 {
+                    remainingBootoutVisiblePrintChecks -= 1
+                    if remainingBootoutVisiblePrintChecks == 0 { loaded.remove(label) }
+                    return .init(status: 0, stdout: Data(), stderr: Data())
+                }
+                return .init(status: loaded.contains(label) ? 0 : 1, stdout: Data(), stderr: Data())
+            }
+            if arguments.first == "bootout" {
+                remainingBootoutVisiblePrintChecks = bootoutVisiblePrintChecks
+                if remainingBootoutVisiblePrintChecks == 0 { loaded.remove(label) }
+                return .init(status: 0, stdout: Data(), stderr: Data())
+            }
+            if arguments.first == "bootstrap" {
+                let bootstrapLabel = label.replacingOccurrences(of: ".plist", with: "")
+                remainingBootstrapInvisiblePrintChecks = bootstrapInvisiblePrintChecks
+                if remainingBootstrapInvisiblePrintChecks == 0 { loaded.insert(bootstrapLabel) }
+                return .init(status: 0, stdout: Data(), stderr: Data())
+            }
         }
         if executable == "/usr/bin/crontab" {
             if arguments == ["-l"] { return .init(status: 0, stdout: crontab, stderr: Data()) }
             if arguments == ["-"] {
-                if failCronReplacement { return .init(status: 1, stdout: Data(), stderr: Data()) }
+                if remainingCronReplacementFailures > 0 {
+                    remainingCronReplacementFailures -= 1
+                    return .init(status: 1, stdout: Data(), stderr: Data())
+                }
                 crontab = input ?? Data()
                 return .init(status: 0, stdout: Data(), stderr: Data())
             }

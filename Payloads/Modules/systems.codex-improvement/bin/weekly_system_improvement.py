@@ -24,12 +24,10 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 
-VERSION = "1.1.0"
+VERSION = "1.1.3"
 SCHEMA_VERSION = 1
 MODEL = "gpt-5.6-sol"
 MODEL_EFFORT = "medium"
-EXPECTED_CODEX_VERSION = "codex-cli 0.147.0-alpha.6.5"
-EXPECTED_CODEX_SHA256 = os.environ.get("WSI_CODEX_SHA256", "")
 TZ = ZoneInfo("America/Chicago")
 MIN_FREE_BYTES = 100 * 1024 * 1024
 MAX_EVIDENCE = 120
@@ -53,8 +51,10 @@ LOCK_FILE = STATE_ROOT / "run.lock"
 PRESENT_LOCK = STATE_ROOT / "presentation.lock"
 PENDING_FLAG = STATE_ROOT / "pending.flag"
 DECLINES_FILE = STATE_ROOT / "declines.json"
-CODEX = Path(os.environ.get("WSI_CODEX_BIN", "/Applications/ChatGPT.app/Contents/Resources/codex"))
-AUTH_FILE = Path(os.environ.get("WSI_AUTH_FILE", HOME / ".codex/auth-state"))
+CANONICAL_CODEX_APP = Path("/Applications/ChatGPT.app")
+CANONICAL_CODEX = CANONICAL_CODEX_APP / "Contents/Resources/codex"
+CODEX = CANONICAL_CODEX
+AUTH_FILE = HOME / ".codex/auth.json"
 LABEL = os.environ.get("WSI_LAUNCHD_LABEL", "com.example.weekly-system-improvement")
 PLIST = HOME / "Library/LaunchAgents" / f"{LABEL}.plist"
 
@@ -580,19 +580,155 @@ def output_schema() -> dict:
     }
 
 
+CODEX_MIN_VERSION = (0, 147, 0)
+CODEX_MAX_VERSION_EXCLUSIVE = (1, 0, 0)
+CODEX_STABILITY_DELAY_SECONDS = 0.05
+CODEX_EXEC_OPTIONS = (
+    "--ephemeral", "--ignore-user-config", "--ignore-rules", "--sandbox",
+    "--skip-git-repo-check", "--output-schema", "--output-last-message",
+)
+OUTER_DESIGNATED_REQUIREMENT = (
+    'designated => identifier "com.openai.codex" and anchor apple generic and '
+    'certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and '
+    'certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and '
+    'certificate leaf[subject.OU] = "2DC432GLL2"'
+)
+NESTED_DESIGNATED_REQUIREMENT = (
+    'designated => identifier codex and anchor apple generic and '
+    'certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and '
+    'certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and '
+    'certificate leaf[subject.OU] = "2DC432GLL2"'
+)
+
+
+def parse_codex_version(value: str) -> tuple[str, tuple[int, int, int]]:
+    """Return the exact CLI version line and its numeric compatibility tuple."""
+    line = value.strip()
+    match = re.fullmatch(
+        r"codex-cli ([0-9]+)\.([0-9]+)\.([0-9]+)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?",
+        line,
+    )
+    if not match:
+        raise WeeklyError("codex_contract", f"Codex version output is invalid: {line}")
+    numeric = tuple(int(part) for part in match.groups())
+    if not CODEX_MIN_VERSION <= numeric < CODEX_MAX_VERSION_EXCLUSIVE or numeric[0] != 0:
+        raise WeeklyError("codex_contract", f"Codex version is outside the supported range: {line}")
+    return line, numeric
+
+
+def has_option_line(help_text: str, option: str) -> bool:
+    """Match an option only when it begins an actual indented help line."""
+    escaped = re.escape(option)
+    return any(re.match(rf"^\s+(?:-[A-Za-z],\s+)?{escaped}(?:\s|,|$)", line)
+               for line in help_text.splitlines())
+
+
+def path_has_symlink_component(path: Path) -> bool:
+    current = Path(path.anchor)
+    for component in path.parts[1:]:
+        current /= component
+        if current.is_symlink():
+            return True
+    return False
+
+
+def require_canonical_path(label: str, path: Path, canonical: Path) -> None:
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError as exc:
+        raise WeeklyError("codex_contract", f"{label} is unavailable") from exc
+    if path_has_symlink_component(path) or resolved != canonical:
+        raise WeeklyError("codex_contract", f"{label} is outside the canonical Codex path")
+
+
+def _binary_identity(info: os.stat_result) -> tuple[int, int, int, int]:
+    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
+
+
+def observe_codex_binary(path: Path) -> tuple[tuple[int, int, int, int], str]:
+    """Read one immutable observation without following a replacement symlink."""
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise WeeklyError("codex_contract", "Installed Codex binary cannot be opened") from exc
+    try:
+        before = os.fstat(fd)
+        if not stat.S_ISREG(before.st_mode):
+            raise WeeklyError("codex_contract", "Installed Codex binary is not a regular file")
+        digest = hashlib.sha256()
+        while True:
+            chunk = os.read(fd, 1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+        after = os.fstat(fd)
+    finally:
+        os.close(fd)
+    identity = _binary_identity(before)
+    if identity != _binary_identity(after):
+        raise WeeklyError("codex_contract", "Installed Codex binary changed while being read")
+    try:
+        current = os.lstat(path)
+    except OSError as exc:
+        raise WeeklyError("codex_contract", "Installed Codex binary disappeared during verification") from exc
+    if stat.S_ISLNK(current.st_mode) or identity != _binary_identity(current):
+        raise WeeklyError("codex_contract", "Installed Codex binary changed during verification")
+    return identity, digest.hexdigest()
+
+
+def stable_codex_observation(path: Path, *, delay: float = CODEX_STABILITY_DELAY_SECONDS,
+                             sleep=time.sleep) -> tuple[str, tuple[int, int, int, int]]:
+    first_identity, first_hash = observe_codex_binary(path)
+    sleep(delay)
+    second_identity, second_hash = observe_codex_binary(path)
+    if (first_identity, first_hash) != (second_identity, second_hash):
+        raise WeeklyError("codex_contract", "Installed Codex binary is unstable")
+    return first_hash, first_identity
+
+
+def designated_requirement(output: str) -> str | None:
+    for line in output.splitlines():
+        if line.startswith("designated =>"):
+            return " ".join(line.split())
+    return None
+
+
+def gatekeeper_accepts(output: str, app: Path) -> bool:
+    expected = f"{app}: accepted"
+    return any(line.strip() == expected for line in output.splitlines())
+
+
+def verify_codesign(label: str, path: Path, *, deep: bool, requirement: str) -> None:
+    verify_args = ["/usr/bin/codesign", "--verify"]
+    if deep:
+        verify_args.append("--deep")
+    verify_args.extend(["--strict", str(path)])
+    run_command(f"codesign-{label}-verify", verify_args, 30)
+    detail = run_command(
+        f"codesign-{label}-requirement",
+        ["/usr/bin/codesign", "-d", "-r-", "--verbose=4", str(path)], 30,
+    )["output"]
+    if designated_requirement(detail) != requirement:
+        raise WeeklyError("codex_contract", f"Installed {label} designated requirement changed")
+
+
 def codex_contract() -> tuple[str, str]:
-    if not CODEX.is_file() or CODEX.is_symlink():
-        raise WeeklyError("codex_contract", "Installed Codex binary is missing or is a symlink")
-    digest = hashlib.sha256(CODEX.read_bytes()).hexdigest()
-    if digest != EXPECTED_CODEX_SHA256:
-        raise WeeklyError("codex_contract", "Installed Codex binary hash changed")
-    version = run_command("codex-version", [str(CODEX), "--version"], 10)["output"].strip()
-    if version != EXPECTED_CODEX_VERSION:
-        raise WeeklyError("codex_contract", f"Codex version changed: {version}")
+    require_canonical_path("Codex app", CANONICAL_CODEX_APP, CANONICAL_CODEX_APP)
+    require_canonical_path("Codex executable", CODEX, CANONICAL_CODEX)
+    digest, _identity = stable_codex_observation(CODEX)
+    verify_codesign("app", CANONICAL_CODEX_APP, deep=True, requirement=OUTER_DESIGNATED_REQUIREMENT)
+    verify_codesign("executable", CODEX, deep=False, requirement=NESTED_DESIGNATED_REQUIREMENT)
+    gatekeeper = run_command(
+        "gatekeeper", ["/usr/sbin/spctl", "--assess", "--type", "execute", "--verbose=4", str(CANONICAL_CODEX_APP)], 30,
+    )["output"]
+    if not gatekeeper_accepts(gatekeeper, CANONICAL_CODEX_APP):
+        raise WeeklyError("codex_contract", "Gatekeeper did not accept the Codex app")
+    version, _numeric = parse_codex_version(run_command("codex-version", [str(CODEX), "--version"], 10)["output"])
     help_text = run_command("codex-help", [str(CODEX), "exec", "--help"], 10)["output"]
-    for flag in ("--ephemeral", "--ignore-user-config", "--ignore-rules", "--sandbox", "--skip-git-repo-check", "--output-schema", "--output-last-message"):
-        if flag not in help_text:
-            raise WeeklyError("codex_contract", f"Codex no longer advertises {flag}")
+    for option in CODEX_EXEC_OPTIONS:
+        if not has_option_line(help_text, option):
+            raise WeeklyError("codex_contract", f"Codex no longer advertises {option} as an option")
     return version, digest
 
 
@@ -837,6 +973,9 @@ def invoke_codex(packet: dict) -> tuple[dict, dict]:
             "--skip-git-repo-check", "--output-schema", str(schema_path),
             "--output-last-message", str(output_path), "-C", str(workspace), model_prompt(),
         ]
+        verified_version, verified_hash = codex_contract()
+        if (verified_version, verified_hash) != (version, binary_hash):
+            raise WeeklyError("codex_contract", "Installed Codex changed before execution")
         result = subprocess.run(
             command, input=json.dumps(packet, ensure_ascii=False), text=True,
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=900,
@@ -1174,6 +1313,38 @@ def selftest() -> int:
     check("decline fingerprint deterministic", proposal_fingerprint("tool", "A", "B") == proposal_fingerprint("tool", "A", "B"))
     fake_token_payload = base64.urlsafe_b64encode(json.dumps({"exp": int((now() + dt.timedelta(hours=7)).timestamp())}).encode()).decode().rstrip("=")
     check("JWT expiry parsed for refresh gate", jwt_expiry(f"x.{fake_token_payload}.y") > now())
+    check("Codex version range accepts supported prerelease", parse_codex_version("codex-cli 0.147.0-alpha.6.5")[1] == (0, 147, 0))
+    check("Codex version range accepts later 0.x release", parse_codex_version("codex-cli 0.150.0+build.1")[1] == (0, 150, 0))
+    for unsupported in ("codex-cli 0.146.9", "codex-cli 1.0.0", "codex-cli 0.147"):
+        try:
+            parse_codex_version(unsupported)
+            version_rejected = False
+        except WeeklyError:
+            version_rejected = True
+        check(f"unsupported Codex version rejected: {unsupported}", version_rejected)
+    option_fixture = "\n".join([
+        "Options:", "      --ephemeral", "      --output-schema <FILE>",
+        "  -o, --output-last-message <FILE>", "      --ignore-rules",
+    ])
+    check("Codex option parser requires an actual option line",
+          has_option_line(option_fixture, "--output-schema")
+          and not has_option_line("This text mentions --sandbox only.", "--sandbox"))
+    check("Gatekeeper parser requires an exact acceptance line",
+          gatekeeper_accepts("/Applications/ChatGPT.app: accepted\nsource=Notarized Developer ID", CANONICAL_CODEX_APP)
+          and not gatekeeper_accepts("/Applications/ChatGPT.app: not accepted", CANONICAL_CODEX_APP)
+          and not gatekeeper_accepts("accepted", CANONICAL_CODEX_APP))
+    with tempfile.TemporaryDirectory() as binary_dir:
+        binary = Path(binary_dir) / "codex"
+        binary.write_bytes(b"immutable test binary\n")
+        observed_hash, observed_identity = stable_codex_observation(binary, delay=0, sleep=lambda _delay: None)
+        check("Codex binary stability observation records hash and metadata",
+              observed_hash == hashlib.sha256(binary.read_bytes()).hexdigest()
+              and observed_identity[2] == binary.stat().st_size
+              and observed_identity[3] == binary.stat().st_mtime_ns)
+        symlink = Path(binary_dir) / "codex-link"
+        symlink.symlink_to(binary)
+        check("Codex canonical-path policy rejects a symlink component",
+              path_has_symlink_component(symlink))
 
     old_paths = (STATE_ROOT, AUDIT_ROOT, LOG_ROOT, STATE_FILE, HEALTH_FILE,
                  LOCK_FILE, PRESENT_LOCK, PENDING_FLAG, DECLINES_FILE, PLIST,

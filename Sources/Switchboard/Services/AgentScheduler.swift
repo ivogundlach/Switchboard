@@ -232,6 +232,7 @@ final class SwitchboardAgent {
         process.environment = [
             "HOME": fileManager.homeDirectoryForCurrentUser.path,
             "PATH": "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin",
+            "PYTHONDONTWRITEBYTECODE": "1",
             "SWITCHBOARD_MODULE_ID": job.moduleID,
             "SWITCHBOARD_RESOURCES_DIR": bundleURL.appending(path: "Contents/Resources").path,
             "SMART_WAKE_HOME": fileManager.homeDirectoryForCurrentUser

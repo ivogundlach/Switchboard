@@ -18,6 +18,8 @@ build/Switchboard.app/Contents/MacOS/Switchboard --self-test
 
 The build creates a local app and does not install it. The self-test checks the manifest, ownership boundaries, bundled commands and Services, runtime jobs, nested helpers, update metadata, and migration inventories. Migration tests cover recoverable scheduler and app retirement, Warm Corners handoff, Kinetics login continuity, permissions, and activation rollback.
 
+The release app is made runtime-read-only after its final signature. This prevents bundled Python tools from creating import caches inside signed Resources and invalidating the installed Developer ID seal; all mutable module state remains outside the app in its established user-state locations.
+
 ## Public release gate
 
 Before publishing an immutable GitHub release, all of these must have current evidence:

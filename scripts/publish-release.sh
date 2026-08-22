@@ -109,6 +109,15 @@ done < <(find "$app/Contents" -depth \( -name '*.app' -o -name '*.appex' -o -nam
 
 codesign --force --sign "$identity_hash" --options runtime --timestamp \
   --preserve-metadata=identifier,entitlements "$app"
+# A user-owned app bundle is writable by default. Bundled Python modules would
+# otherwise create __pycache__ inside signed Resources and invalidate the seal.
+# Updates replace the whole bundle from /Applications, so runtime code never
+# needs write access anywhere below the app root.
+chmod -R a-w "$app"
+if [[ -n "$(find "$app" -perm -u+w -print -quit)" ]]; then
+  printf 'Release app still contains owner-writable signed content.\n' >&2
+  exit 6
+fi
 codesign --verify --deep --strict --verbose=2 "$app"
 
 team="$(codesign -dv --verbose=4 "$app" 2>&1 | sed -n 's/^TeamIdentifier=//p')"

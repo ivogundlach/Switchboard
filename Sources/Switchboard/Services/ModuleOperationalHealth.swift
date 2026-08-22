@@ -245,6 +245,7 @@ enum ModuleOperationalHealthService {
         var environment = ProcessInfo.processInfo.environment
         environment["HOME"] = homeDirectory.path
         environment["PATH"] = "\(homeDirectory.path)/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        environment["PYTHONDONTWRITEBYTECODE"] = "1"
         environment["SWITCHBOARD_RESOURCES_DIR"] = bundleURL.appending(path: "Contents/Resources").path
         process.environment = environment
         process.standardInput = FileHandle.nullDevice

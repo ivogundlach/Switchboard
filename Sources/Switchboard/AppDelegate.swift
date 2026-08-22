@@ -133,6 +133,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         process.environment = [
             "HOME": FileManager.default.homeDirectoryForCurrentUser.path,
             "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+            "PYTHONDONTWRITEBYTECODE": "1",
             "AIDMG_SUPPORT_DIR": supportURL.path,
         ]
         process.standardInput = FileHandle.nullDevice

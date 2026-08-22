@@ -66,8 +66,11 @@ ATTACHMENT_MAX_ENCODED_BYTES = 20 * 1024 * 1024
 ROWID_BODY_COMMAND = os.environ.get("APPLE_MAIL_ROWID_BODY", "apple-mail-rowid-body")
 SCAN_TERMINAL_STATUSES = {
     "drafted", "skipped", "failed-permanent", "deleted-junk",
-    "moved-junk-to-inbox", "resolved",
+    "moved-junk-to-inbox", "moved-inbox-to-junk", "resolved",
 }
+HTML_CLASSIFIER_CHAR_LIMIT = 200_000
+HTML_CLASSIFIER_NODE_LIMIT = 2_000
+HTML_CLASSIFIER_DEPTH_LIMIT = 64
 
 
 FORBIDDEN_SENDER_PATTERNS = (
@@ -326,6 +329,64 @@ on run argv
 end run
 '''
 
+INBOX_MOVE_TO_JUNK_APPLESCRIPT = r'''
+on matchingMessages(targetMailbox, expectedMessageId, expectedSender, expectedSubject, expectedDate)
+    tell application "Mail"
+        if expectedMessageId is not "" then
+            set candidates to every message of targetMailbox whose message id is expectedMessageId
+        else
+            set candidates to every message of targetMailbox whose subject is expectedSubject
+        end if
+        set matchedMessages to {}
+        repeat with candidate in candidates
+            try
+                if (sender of candidate as text) is expectedSender and (subject of candidate as text) is expectedSubject and (date received of candidate) is expectedDate then
+                    set end of matchedMessages to candidate
+                end if
+            end try
+        end repeat
+        return matchedMessages
+    end tell
+end matchingMessages
+
+on run argv
+    set mailId to item 1 of argv as integer
+    tell application "Mail"
+        set sourceMatches to every message of inbox whose id is mailId
+        if (count of sourceMatches) is not 1 then error "Inbox junk move requires one exact current Mail id"
+        set m to item 1 of sourceMatches
+        set sourceMailbox to mailbox of m
+        set sourceAccount to account of sourceMailbox
+        set junkCandidates to {}
+        repeat with box in mailboxes of sourceAccount
+            set boxName to name of box as text
+            if boxName is "Junk" or boxName is "Spam" then set end of junkCandidates to box
+        end repeat
+        if (count of junkCandidates) is not 1 then error "account does not have one unique Junk or Spam mailbox"
+        set targetJunk to item 1 of junkCandidates
+        set rawMessageId to message id of m
+        if rawMessageId is missing value then
+            set expectedMessageId to ""
+        else
+            set expectedMessageId to rawMessageId as text
+        end if
+        set expectedSender to sender of m as text
+        set expectedSubject to subject of m as text
+        set expectedDate to date received of m
+        move m to targetJunk
+        set junkMatches to {}
+        repeat 10 times
+            set junkMatches to my matchingMessages(targetJunk, expectedMessageId, expectedSender, expectedSubject, expectedDate)
+            if (count of junkMatches) is greater than 0 then exit repeat
+            delay 1
+        end repeat
+        if (count of junkMatches) is not 1 then error "suspicious message did not produce one unique Junk copy after move"
+        set junk mail status of item 1 of junkMatches to true
+        return (name of sourceAccount as text) & "|" & (name of targetJunk as text)
+    end tell
+end run
+'''
+
 
 class PlainTextHTMLParser(HTMLParser):
     def __init__(self) -> None:
@@ -349,6 +410,81 @@ class PlainTextHTMLParser(HTMLParser):
         return html.unescape(joined).strip()
 
 
+class HTMLStructureLimit(RuntimeError):
+    pass
+
+
+class SpamStructureHTMLParser(HTMLParser):
+    VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.stack: list[tuple[str, bool]] = []
+        self.visible_parts: list[str] = []
+        self.hidden_parts: list[str] = []
+        self.image_count = 0
+        self.node_count = 0
+        self.complete = True
+
+    def _start(self, tag: str, attrs: list[tuple[str, str | None]], push: bool) -> None:
+        self.node_count += 1
+        if self.node_count > HTML_CLASSIFIER_NODE_LIMIT:
+            raise HTMLStructureLimit("HTML node limit exceeded")
+        if len(self.stack) >= HTML_CLASSIFIER_DEPTH_LIMIT:
+            raise HTMLStructureLimit("HTML nesting limit exceeded")
+        tag = tag.casefold()
+        values = {name.casefold(): (value or "") for name, value in attrs}
+        style = re.sub(r"\s+", "", values.get("style", "").casefold())
+        explicitly_hidden = (
+            "hidden" in values
+            or "display:none" in style
+            or "visibility:hidden" in style
+            or "opacity:0" in style
+        )
+        hidden = (self.stack[-1][1] if self.stack else False) or explicitly_hidden
+        if tag == "img":
+            self.image_count += 1
+        if push and tag not in self.VOID_TAGS:
+            self.stack.append((tag, hidden))
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self._start(tag, attrs, True)
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self._start(tag, attrs, False)
+
+    def handle_endtag(self, tag: str) -> None:
+        tag = tag.casefold()
+        if not self.stack or self.stack[-1][0] != tag:
+            self.complete = False
+            return
+        self.stack.pop()
+
+    def handle_data(self, data: str) -> None:
+        if sum(map(len, self.visible_parts)) + sum(map(len, self.hidden_parts)) + len(data) > HTML_CLASSIFIER_CHAR_LIMIT:
+            raise HTMLStructureLimit("HTML text limit exceeded")
+        if self.stack and self.stack[-1][1]:
+            self.hidden_parts.append(data)
+        else:
+            self.visible_parts.append(data)
+
+    def finish(self) -> None:
+        if self.stack:
+            self.complete = False
+
+    @staticmethod
+    def normalized(parts: list[str]) -> str:
+        return re.sub(r"\s+", " ", html.unescape(" ".join(parts))).strip()
+
+
+@dataclass(frozen=True)
+class ContentJunkAssessment:
+    level: str
+    reason: str
+    evidence: tuple[str, ...]
+    parser_complete: bool
+
+
 @dataclass
 class MessageRecord:
     mail_id: int
@@ -369,6 +505,8 @@ class MessageRecord:
     state_key: str
     reply_from: str = ""
     conversation_id: int = 0
+    html_body: str = ""
+    html_complete: bool = True
 
 
 def fail(message: str, code: int = 1) -> None:
@@ -438,7 +576,7 @@ def save_state(state: dict[str, Any]) -> None:
 
 
 def mark_state(key: str, status: str, reason: str, extra: dict[str, Any] | None = None) -> dict[str, Any]:
-    if status not in {"drafted", "skipped", "failed", "failed-permanent", "deleted-junk", "moved-junk-to-inbox"}:
+    if status not in {"drafted", "skipped", "failed", "failed-permanent", "deleted-junk", "moved-junk-to-inbox", "moved-inbox-to-junk"}:
         fail(f"invalid status: {status}")
     with state_lock():
         state = load_state()
@@ -659,6 +797,10 @@ def move_junk_mail_to_inbox(account_name: str, mailbox_name: str, mail_id: int) 
     run_osascript(JUNK_MOVE_TO_INBOX_APPLESCRIPT, account_name, mailbox_name, str(mail_id))
 
 
+def move_inbox_mail_to_junk(mail_id: int) -> str:
+    return run_osascript(INBOX_MOVE_TO_JUNK_APPLESCRIPT, str(mail_id)).strip()
+
+
 def sqlite_rows(query: str, params: tuple[Any, ...] = ()) -> list[sqlite3.Row]:
     if not MAIL_DB.exists():
         fail(f"Mail database not found: {MAIL_DB}")
@@ -828,6 +970,23 @@ def message_body(msg: email.message.EmailMessage) -> str:
         if isinstance(content, str):
             return content.strip()
     return ""
+
+
+def message_html(msg: email.message.EmailMessage) -> tuple[str, bool]:
+    part = msg.get_body(preferencelist=("html",))
+    if part is None and msg.get_content_type() == "text/html":
+        part = msg
+    if part is None:
+        return "", True
+    try:
+        content = part.get_content()
+    except Exception:
+        return "", False
+    if not isinstance(content, str):
+        return "", False
+    if len(content) > HTML_CLASSIFIER_CHAR_LIMIT:
+        return content[:HTML_CLASSIFIER_CHAR_LIMIT], False
+    return content, True
 
 
 def normalized_headers(msg: email.message.EmailMessage) -> dict[str, str]:
@@ -1136,7 +1295,81 @@ def obvious_junk_reason(record: MessageRecord) -> str | None:
     spam_status = record.headers.get("x-spam-status", "").strip().lower()
     if spam_status.startswith("yes"):
         return "spam-header:x-spam-status"
+    assessment = content_junk_assessment(record)
+    if assessment.level == "clear-spam":
+        return assessment.reason
     return None
+
+
+SPAM_SALES_SUBJECT_PATTERNS = (
+    "your guide to",
+    "free quote",
+    "limited time",
+    "exclusive offer",
+    "transform your",
+    "upgrade your",
+    "save on your",
+)
+SPAM_IDENTITY_STOPWORDS = {"offer", "offers", "team", "news", "newsletter", "support", "service", "services"}
+
+
+def content_words(text: str) -> set[str]:
+    return {
+        word for word in re.findall(r"[a-z0-9]+", (text or "").casefold())
+        if len(word) >= 5
+    }
+
+
+def claimed_identity_mismatch(record: MessageRecord) -> bool:
+    domain = record.sender_address.rsplit("@", 1)[-1].casefold() if "@" in record.sender_address else ""
+    domain_compact = re.sub(r"[^a-z0-9]", "", domain)
+    claimed = [
+        word for word in re.findall(r"[a-z0-9]+", (record.sender_name or "").casefold())
+        if len(word) >= 7 and word not in SPAM_IDENTITY_STOPWORDS
+    ]
+    return bool(claimed and domain_compact and any(word not in domain_compact for word in claimed))
+
+
+def content_junk_assessment(record: MessageRecord) -> ContentJunkAssessment:
+    intent = any(pattern in (record.subject or "").casefold() for pattern in SPAM_SALES_SUBJECT_PATTERNS)
+    identity_mismatch = claimed_identity_mismatch(record)
+    if not record.html_body:
+        evidence = tuple(
+            name for name, present in (("sales-intent", intent), ("identity-mismatch", identity_mismatch))
+            if present
+        )
+        if len(evidence) >= 2:
+            return ContentJunkAssessment("suspicious", "content-suspicious:" + ",".join(evidence), evidence, record.html_complete)
+        return ContentJunkAssessment("", "", evidence, record.html_complete)
+    parser = SpamStructureHTMLParser()
+    parser_complete = record.html_complete
+    try:
+        parser.feed(record.html_body)
+        parser.close()
+        parser.finish()
+        parser_complete = parser_complete and parser.complete
+    except HTMLStructureLimit:
+        parser_complete = False
+    visible = parser.normalized(parser.visible_parts)
+    hidden = parser.normalized(parser.hidden_parts)
+    image_only = parser.image_count >= 3 and len(visible) <= 120
+    context_words = content_words(" ".join((record.sender_name, record.subject, visible)))
+    hidden_words = content_words(hidden)
+    hidden_unrelated = len(hidden) >= 500 and len(context_words & hidden_words) < 2
+    evidence = tuple(
+        name for name, present in (
+            ("hidden-unrelated-payload", hidden_unrelated),
+            ("image-only-html", image_only),
+            ("identity-mismatch", identity_mismatch),
+            ("sales-intent", intent),
+        ) if present
+    )
+    if parser_complete and hidden_unrelated and image_only and identity_mismatch and intent:
+        return ContentJunkAssessment("clear-spam", "content-clear-spam:" + ",".join(evidence), evidence, True)
+    if len(evidence) >= 2:
+        reason = "content-suspicious:" + (",".join(evidence) or "incomplete-html")
+        return ContentJunkAssessment("suspicious", reason, evidence, parser_complete)
+    return ContentJunkAssessment("", "", evidence, parser_complete)
 
 
 PUBLIC_MAIL_DOMAINS = {
@@ -1297,14 +1530,43 @@ def junk_protect_reason(
 
 INSTITUTIONAL_SENDER_TLDS = (".edu", ".gov", ".mil", ".ac.uk", ".edu.au")
 APPLE_RELAY_DOMAINS = {"privaterelay.appleid.com"}
-USER_CONFIRMED_SPAM_SENDERS = {
-    address.strip().lower()
-    for address in os.environ.get(
-        "APPLE_MAIL_CONFIRMED_SPAM_SENDERS",
-        "confirmed-spam@example.invalid,other-confirmed@example.invalid",
-    ).split(",")
-    if address.strip()
-}
+CONFIRMED_SPAM_SENDERS_FILE = Path(
+    os.environ.get(
+        "APPLE_MAIL_CONFIRMED_SPAM_SENDERS_FILE",
+        HOME / ".config" / "switchboard" / "mail-assistant-confirmed-spam-senders.txt",
+    )
+)
+
+
+def normalize_configured_sender(value: str) -> str | None:
+    candidate = value.strip().casefold()
+    if not re.fullmatch(r"[^@\s,]+@[^@\s,]+", candidate):
+        return None
+    return candidate
+
+
+def configured_confirmed_spam_senders(
+    env_value: str | None = None, file_path: Path | None = None
+) -> set[str]:
+    raw_env = os.environ.get("APPLE_MAIL_CONFIRMED_SPAM_SENDERS", "") if env_value is None else env_value
+    entries = raw_env.split(",")
+    path = CONFIRMED_SPAM_SENDERS_FILE if file_path is None else file_path
+    try:
+        entries.extend(
+            line for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        )
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        raise RuntimeError(f"confirmed spam sender file is unreadable: {path}: {exc}") from exc
+    normalized = {normalize_configured_sender(entry) for entry in entries if entry.strip()}
+    if None in normalized:
+        raise RuntimeError("confirmed spam sender configuration contains an invalid exact address")
+    return {address for address in normalized if address is not None}
+
+
+USER_CONFIRMED_SPAM_SENDERS = configured_confirmed_spam_senders()
 
 # Recruitment blasts from other institutions are marketing; a mass mailing from
 # a configured institution can be a real deadline, so its domain keeps a shield.
@@ -1450,11 +1712,26 @@ def junk_delete_reason(
     Bulk/list headers describe delivery method, not whether the user wants the message.
     They can inform protection rules but never authorize deletion on their own.
     """
+    confirmed = user_confirmed_spam_reason(record)
+    if confirmed:
+        return confirmed
     if junk_protect_reason(record, correspondents):
         return None
     if junk_spare_reason(record, correspondents):
         return None
-    return obvious_junk_reason(record) or user_confirmed_spam_reason(record)
+    return obvious_junk_reason(record)
+
+
+def junk_sort_reasons(
+    record: MessageRecord, correspondents: tuple[set[str], set[str]] | None
+) -> tuple[str | None, str | None]:
+    reason = (
+        junk_delete_reason(record, correspondents)
+        if correspondents is not None
+        else user_confirmed_spam_reason(record)
+    )
+    protect = None if reason else junk_protect_reason(record, correspondents)
+    return reason, protect
 
 
 def parse_mail_date(headers: dict[str, str]) -> int:
@@ -1572,6 +1849,7 @@ def load_junk_messages(limit: int, body_char_limit: int) -> list[tuple[str, str,
                 sender_raw, subject, source, content, junk = applescript_message_fields_in_mailbox(account_name, mailbox_name, mail_id)
                 msg = source_message_from_text(source)
                 headers = normalized_headers(msg)
+                html_body, html_complete = message_html(msg)
                 sender_name, sender_address = parse_sender("", sender_raw, headers)
                 date_received = parse_mail_date(headers)
                 body = content or message_body(msg)
@@ -1597,6 +1875,8 @@ def load_junk_messages(limit: int, body_char_limit: int) -> list[tuple[str, str,
                     body_truncated=body_truncated,
                     state_key=state_key_for_fields(mailbox_url, date_received, sender_address, subject, headers, source),
                     reply_from=reply_from_for_headers(headers),
+                    html_body=html_body,
+                    html_complete=html_complete,
                 )
                 records.append((account_name, mailbox_name, record))
             except Exception as exc:
@@ -1616,6 +1896,7 @@ def load_messages_applescript(limit: int, max_age_days: int | None, body_char_li
             sender_raw, subject, source, content, junk = applescript_message_fields(mail_id)
             msg = source_message_from_text(source)
             headers = normalized_headers(msg)
+            html_body, html_complete = message_html(msg)
             sender_name, sender_address = parse_sender("", sender_raw, headers)
             reply_from = reply_from_for_headers(headers)
             date_received = parse_mail_date(headers)
@@ -1645,6 +1926,8 @@ def load_messages_applescript(limit: int, max_age_days: int | None, body_char_li
                     body_truncated=body_truncated,
                     state_key=state_key_for_fields(mailbox_url, date_received, sender_address, subject, headers, source),
                     reply_from=reply_from,
+                    html_body=html_body,
+                    html_complete=html_complete,
                 )
             )
         except Exception as exc:
@@ -1701,6 +1984,8 @@ def load_messages(limit: int, max_age_days: int | None, body_char_limit: int) ->
         emlx_path = find_emlx(int(row["mail_id"]))
         headers: dict[str, str] = {}
         body = ""
+        html_body = ""
+        html_complete = True
         mime_bytes: bytes | None = None
         source_fallback_needed = not bool(emlx_path)
         if emlx_path:
@@ -1708,6 +1993,7 @@ def load_messages(limit: int, max_age_days: int | None, body_char_limit: int) ->
                 msg = read_emlx_message(emlx_path)
                 headers = normalized_headers(msg)
                 body = message_body(msg)
+                html_body, html_complete = message_html(msg)
                 mime_bytes = msg.as_bytes(policy=email.policy.default)
             except Exception:
                 source_fallback_needed = True
@@ -1718,6 +2004,7 @@ def load_messages(limit: int, max_age_days: int | None, body_char_limit: int) ->
                 headers = normalized_headers(source_msg)
                 mime_bytes = source.encode("utf-8", errors="replace")
                 body = source_content or message_body(source_msg)
+                html_body, html_complete = message_html(source_msg)
             except Exception as exc:
                 raise RuntimeError(f"source-fallback-failed:{int(row['mail_id'])}:{exc}") from exc
         clean_mail_body = mail_content_by_id(int(row["mail_id"]))
@@ -1750,6 +2037,8 @@ def load_messages(limit: int, max_age_days: int | None, body_char_limit: int) ->
                 state_key=key,
                 reply_from=reply_from,
                 conversation_id=int(row["conversation_id"] or 0),
+                html_body=html_body,
+                html_complete=html_complete,
             )
         )
         if len(records) >= limit:
@@ -1770,11 +2059,16 @@ def scan(args: argparse.Namespace) -> None:
     action_errors = []
     correspondents = known_correspondents()
     for record in records:
+        content_assessment = content_junk_assessment(record)
         existing = processed.get(record.state_key, {})
         status = existing.get("status")
         if status in SCAN_TERMINAL_STATUSES:
             continue
-        delete_reason = junk_delete_reason(record, correspondents) if correspondents is not None else None
+        delete_reason = (
+            junk_delete_reason(record, correspondents)
+            if correspondents is not None
+            else user_confirmed_spam_reason(record)
+        )
         if delete_reason:
             item = {
                 "state_key": record.state_key,
@@ -1791,6 +2085,8 @@ def scan(args: argparse.Namespace) -> None:
                     "mail_id": record.mail_id,
                     "mailbox": record.mailbox_url,
                     "marked_read_before_delete": True,
+                    "content_evidence": list(content_assessment.evidence),
+                    "content_parser_complete": content_assessment.parser_complete,
                 })
             except Exception as exc:
                 failure_reason = f"inbox-junk-delete-failed:{exc}"
@@ -1807,8 +2103,18 @@ def scan(args: argparse.Namespace) -> None:
             skipped.append(item)
             review_items.append(item)
             continue
-        junk_reason = obvious_junk_reason(record)
-        if junk_reason and correspondents is None:
+        protected = junk_protect_reason(record, correspondents)
+        spared = junk_spare_reason(record, correspondents)
+        provider_junk_reason = obvious_junk_reason(record)
+        move_reason = ""
+        if not protected and not spared:
+            if content_assessment.level in {"clear-spam", "suspicious"}:
+                move_reason = content_assessment.reason
+            elif record.junk:
+                move_reason = "content-suspicious:mail-junk-status"
+            elif provider_junk_reason and correspondents is None:
+                move_reason = "content-suspicious:" + provider_junk_reason
+        if move_reason:
             item = {
                 "state_key": record.state_key,
                 "mail_id": record.mail_id,
@@ -1816,8 +2122,26 @@ def scan(args: argparse.Namespace) -> None:
                 "sender_name": record.sender_name,
                 "sender_address": record.sender_address,
                 "subject": record.subject,
-                "reason": "inbox-junk-kept:correspondents-unavailable",
+                "reason": move_reason,
             }
+            try:
+                destination = move_inbox_mail_to_junk(record.mail_id)
+                mark_state(record.state_key, "moved-inbox-to-junk", move_reason, {
+                    "mail_id": record.mail_id,
+                    "source_mailbox": record.mailbox_url,
+                    "destination_mailbox": destination,
+                    "content_evidence": list(content_assessment.evidence),
+                    "content_parser_complete": content_assessment.parser_complete,
+                })
+            except Exception as exc:
+                failure_reason = f"inbox-junk-move-failed:{exc}"
+                mark_state(record.state_key, "failed", failure_reason, {
+                    "phase": "inbox-junk-routing",
+                    "mail_id": record.mail_id,
+                    "mailbox": record.mailbox_url,
+                })
+                item["move_error"] = str(exc)
+                action_errors.append(item)
             skipped.append(item)
             review_items.append(item)
             continue
@@ -1916,16 +2240,16 @@ def sort_junk(args: argparse.Namespace) -> None:
     left_in_junk = []
     action_errors = []
     for account_name, mailbox_name, record in records:
-        protect = junk_protect_reason(record, correspondents)
+        reason, protect = junk_sort_reasons(record, correspondents)
         # Unknown correspondents means the allowlist is unavailable, not empty.
         # Deleting under that uncertainty is exactly the failure being fixed here.
-        reason = None if (protect or correspondents is None) else junk_delete_reason(record, correspondents)
         if not protect and not reason:
             if correspondents is None:
                 left_reason = "left-in-junk:correspondents-unavailable"
             else:
                 left_reason = (
                     junk_spare_reason(record, correspondents)
+                    or content_junk_assessment(record).reason
                     or "left-in-junk:not-flagged-not-bulk"
                 )
             left_in_junk.append(review_item(record, left_reason))
@@ -2945,6 +3269,12 @@ def self_test(args: argparse.Namespace) -> None:
             moved = mark_state("self-test-moved", "moved-junk-to-inbox", "protected-reply")
             if moved.get("status") != "moved-junk-to-inbox":
                 errors.append("junk move success could not be recorded")
+            routed = mark_state("self-test-borderline", "moved-inbox-to-junk", "content-suspicious:test")
+            reconsidered = mark_state("self-test-borderline", "deleted-junk", "spam-header:x-spam-flag")
+            if routed.get("status") != "moved-inbox-to-junk" or reconsidered.get("status") != "deleted-junk":
+                errors.append("Inbox-to-Junk state could not be reconsidered by the Junk sorter")
+            if "moved-inbox-to-junk" not in SCAN_TERMINAL_STATUSES:
+                errors.append("Inbox scan can reconsider a message after moving it to Junk")
         finally:
             globals()["STATE_DIR"], globals()["STATE_FILE"], globals()["LOCK_FILE"] = original_state_dir, original_state_file, original_lock_file
     for name, script in (("reply", REPLY_APPLESCRIPT), ("message draft", MESSAGE_DRAFT_APPLESCRIPT)):
@@ -3317,6 +3647,24 @@ def self_test(args: argparse.Namespace) -> None:
         errors.append("junk review routing does not clear junk status")
     if "protected message was not verified as non-junk in account inbox" not in normalized_move_script:
         errors.append("junk review routing does not verify the move")
+    normalized_inbox_junk_script = re.sub(r"\s+", " ", INBOX_MOVE_TO_JUNK_APPLESCRIPT).lower()
+    if re.search(r"\bdelete\b", normalized_inbox_junk_script):
+        errors.append("Inbox-to-Junk routing contains a deletion operation")
+    for required in (
+        "every message of inbox whose id is mailid",
+        "if (count of sourcematches) is not 1",
+        "set sourceaccount to account of sourcemailbox",
+        'boxname is "junk" or boxname is "spam"',
+        "if (count of junkcandidates) is not 1",
+        "expectedmessageid",
+        "expectedsender",
+        "expectedsubject",
+        "expecteddate",
+        "if (count of junkmatches) is not 1",
+        "set junk mail status of item 1 of junkmatches to true",
+    ):
+        if required not in normalized_inbox_junk_script:
+            errors.append(f"Inbox-to-Junk routing is missing safety check: {required}")
     mail_junk_only = MessageRecord(
         mail_id=8,
         date_received=1,
@@ -3357,6 +3705,129 @@ def self_test(args: argparse.Namespace) -> None:
     )
     if obvious_junk_reason(spam_header) != "spam-header:x-spam-flag":
         errors.append("spam header detection failed")
+    structural_html = (
+        "<html><body><center>" + "".join('<a><img src="https://assets.invalid/x.jpg"></a>' for _ in range(4))
+        + "</center><div style='display:none'>" + ("unrelated registry network allocation payload " * 25)
+        + "</div></body></html>"
+    )
+    structural_spam = replace(
+        spam_header,
+        mail_id=10,
+        sender_address="random@rotating-domain.invalid",
+        sender_name="ExampleBathOffer offer",
+        subject="Your guide to better bathroom design",
+        headers={},
+        html_body=structural_html,
+        html_complete=True,
+        state_key="rfc:<structural-spam@example.com>",
+    )
+    structural_assessment = content_junk_assessment(structural_spam)
+    expected_structural_evidence = {
+        "hidden-unrelated-payload", "image-only-html", "identity-mismatch", "sales-intent"
+    }
+    if structural_assessment.level != "clear-spam" or set(structural_assessment.evidence) != expected_structural_evidence:
+        errors.append("rotating-address structural spam did not reach the clear-spam threshold")
+    if not obvious_junk_reason(structural_spam).startswith("content-clear-spam:"):
+        errors.append("structural clear spam was not eligible for deletion")
+    incomplete_structural = replace(structural_spam, html_complete=False)
+    if content_junk_assessment(incomplete_structural).level != "suspicious":
+        errors.append("incomplete structural evidence was not reduced to recoverable Junk routing")
+    oversized_structural = replace(structural_spam, html_body=structural_html + ("x" * HTML_CLASSIFIER_CHAR_LIMIT))
+    if content_junk_assessment(oversized_structural).level == "clear-spam":
+        errors.append("HTML over the classifier limit was eligible for deletion")
+    ordinary_newsletter = replace(
+        structural_spam,
+        sender_address="news@examplebathoffer.com",
+        sender_name="ExampleBathOffer",
+        subject="Monthly project ideas",
+        html_body="<html><body><h1>Monthly project ideas</h1><p>Here are the articles you requested.</p><img src='one'><img src='two'></body></html>",
+    )
+    if content_junk_assessment(ordinary_newsletter).level:
+        errors.append("ordinary visible newsletter content was treated as suspicious")
+    unfamiliar_legitimate_marketing = replace(
+        structural_spam,
+        sender_address="campaign@mailer.vendor.invalid",
+        sender_name="Neighborhood Renovation",
+        subject="Your guide to better bathroom design",
+        html_body=(
+            "<html><body><div style='display:none'>Your guide to better bathroom design from Neighborhood Renovation</div>"
+            "<h1>Neighborhood Renovation</h1><p>You subscribed for monthly remodeling ideas and may unsubscribe below.</p>"
+            + "".join("<img src='https://cdn.vendor.invalid/image.jpg'>" for _ in range(4))
+            + "</body></html>"
+        ),
+    )
+    if content_junk_assessment(unfamiliar_legitimate_marketing).level == "clear-spam":
+        errors.append("legitimate unfamiliar-domain marketing was eligible for automatic deletion")
+    image_heavy_receipt = replace(
+        structural_spam,
+        sender_address="receipt@merchant.invalid",
+        sender_name="Merchant Receipts",
+        subject="Your receipt",
+        html_body=(
+            "<html><body><div style='display:none'>Your receipt from Merchant Receipts</div>"
+            + "".join("<img src='cid:item'>" for _ in range(4)) + "</body></html>"
+        ),
+    )
+    if content_junk_assessment(image_heavy_receipt).level == "clear-spam":
+        errors.append("image-heavy receipt was eligible for automatic deletion")
+    accessibility_hidden = replace(
+        structural_spam,
+        html_body=(
+            "<html><body><div style='display:none'>" + ("bathroom design description for screen readers " * 20)
+            + "</div><p>Accessible bathroom design guide</p>"
+            + "".join("<img src='x' alt='bathroom option'>" for _ in range(4)) + "</body></html>"
+        ),
+    )
+    if content_junk_assessment(accessibility_hidden).level == "clear-spam":
+        errors.append("accessibility-related hidden text enabled automatic deletion")
+    duplicated_preheader = replace(
+        structural_spam,
+        html_body=(
+            "<html><body><div style='display:none'>Your guide to better bathroom design "
+            + ("bathroom design guide " * 30)
+            + "</div>" + "".join("<img src='x'>" for _ in range(4)) + "</body></html>"
+        ),
+    )
+    if content_junk_assessment(duplicated_preheader).level == "clear-spam":
+        errors.append("subject-related hidden preheader text enabled automatic deletion")
+    threaded_structural = replace(structural_spam, headers={"in-reply-to": "<sent@example.com>"})
+    if junk_delete_reason(threaded_structural, (set(), set())) is not None:
+        errors.append("thread protection did not prevent structural auto-deletion")
+    if junk_delete_reason(structural_spam, ({structural_spam.sender_address}, {"rotating-domain.invalid"})) is not None:
+        errors.append("known-correspondent protection did not prevent structural auto-deletion")
+    protected_structural_cases = (
+        replace(structural_spam, sender_address="notice@uah.edu"),
+        replace(structural_spam, sender_address="alias@privaterelay.appleid.com"),
+        replace(structural_spam, sender_address="receipt@merchant.invalid", subject="Your receipt"),
+    )
+    for protected_record in protected_structural_cases:
+        correspondents_for_case = ({protected_record.sender_address}, {sender_domain(protected_record)})
+        if junk_delete_reason(protected_record, correspondents_for_case) is not None:
+            errors.append(f"structural classifier bypassed a spare/protect rule: {protected_record.sender_address}")
+    for image_count in (2, 3, 10):
+        mutated = replace(
+            structural_spam,
+            sender_address=f"rotated{image_count}@different{image_count}.invalid",
+            sender_name="WestShoreHome promotion",
+            subject="YOUR GUIDE TO BETTER BATHROOM DESIGN",
+            html_body=(
+                "<html><body>" + ("<img src='x'>" * image_count)
+                + "<div hidden>" + ("unrelated registry allocation payload " * 25) + "</div></body></html>"
+            ),
+        )
+        expected_level = "clear-spam" if image_count >= 3 else "suspicious"
+        if content_junk_assessment(mutated).level != expected_level:
+            errors.append(f"rotating-address structural mutation with {image_count} images had wrong classification")
+    for limited_html in (
+        "<div>" * (HTML_CLASSIFIER_DEPTH_LIMIT + 1),
+        "<img>" * (HTML_CLASSIFIER_NODE_LIMIT + 1),
+    ):
+        started = time.monotonic()
+        limited_result = content_junk_assessment(replace(structural_spam, html_body=limited_html))
+        if limited_result.level == "clear-spam" or limited_result.parser_complete:
+            errors.append("HTML parser limit failure did not fail closed to recoverable handling")
+        if time.monotonic() - started > 1.0:
+            errors.append("HTML parser limit check exceeded one second")
     threaded_spam_flagged = MessageRecord(
         mail_id=11,
         date_received=1,
@@ -3408,6 +3879,37 @@ def self_test(args: argparse.Namespace) -> None:
     )
     if junk_delete_reason(google_one_bulk, (set(), set())) is not None:
         errors.append("Google One List-ID regression: legitimate bulk mail was deleted")
+    USER_CONFIRMED_SPAM_SENDERS.update({"confirmed-spam@example.invalid", "other-confirmed@example.invalid"})
+    if normalize_configured_sender(" Confirmed-Spam@Example.Invalid ") != "confirmed-spam@example.invalid":
+        errors.append("confirmed spam sender normalization did not trim and case-fold")
+    if normalize_configured_sender("first@example.invalid,second@example.invalid") is not None:
+        errors.append("multiple configured sender addresses were accepted as one exact address")
+    with tempfile.TemporaryDirectory() as tmp:
+        missing_config = Path(tmp) / "missing.txt"
+        if configured_confirmed_spam_senders("", missing_config):
+            errors.append("unset confirmed spam configuration did not produce an empty set")
+        configured_file = Path(tmp) / "confirmed.txt"
+        configured_file.write_text("# exact sender\n File@Test.Example \n", encoding="utf-8")
+        if configured_confirmed_spam_senders("Env@Test.Example", configured_file) != {
+            "env@test.example", "file@test.example"
+        }:
+            errors.append("environment and private-file confirmed spam senders were not combined")
+        duplicate_file = Path(tmp) / "duplicate.txt"
+        duplicate_file.write_text("DUP@Test.Example\ndup@test.example\n", encoding="utf-8")
+        if configured_confirmed_spam_senders("dup@test.example", duplicate_file) != {"dup@test.example"}:
+            errors.append("duplicate confirmed spam senders were not deduplicated")
+        malformed_file = Path(tmp) / "malformed.txt"
+        malformed_file.write_text("valid@test.example\nnot-an-address\n", encoding="utf-8")
+        try:
+            configured_confirmed_spam_senders("", malformed_file)
+            errors.append("mixed valid and malformed confirmed spam configuration was accepted")
+        except RuntimeError:
+            pass
+        try:
+            configured_confirmed_spam_senders("", Path(tmp))
+            errors.append("unreadable confirmed spam configuration was accepted")
+        except RuntimeError:
+            pass
     confirmed_clearer_thinking = replace(
         legitimate_bulk,
         sender_address="confirmed-spam@example.invalid",
@@ -3426,11 +3928,19 @@ def self_test(args: argparse.Namespace) -> None:
         (set(), set()),
     ) is not None:
         errors.append("unrelated sender at a confirmed campaign domain was deleted")
+    for nonexact in (
+        "confirmed-spam+offer@example.invalid",
+        "confirmed-spam@sub.example.invalid",
+        "Confirmed Sender <confirmed-spam@example.invalid>",
+        "prefix-confirmed-spam@example.invalid",
+    ):
+        if user_confirmed_spam_reason(replace(confirmed_clearer_thinking, sender_address=nonexact)) is not None:
+            errors.append(f"non-exact sender matched confirmed spam rule: {nonexact}")
     if junk_delete_reason(
         replace(confirmed_clearer_thinking, headers={"in-reply-to": "<sent-by-user@example.com>"}),
         (set(), set()),
-    ) is not None:
-        errors.append("thread protection did not outrank an exact confirmed sender")
+    ) != expected_confirmed:
+        errors.append("an exact user-confirmed sender was rescued by a forged or stale thread header")
     confirmed_house_project_pros = replace(
         legitimate_bulk,
         sender_address="other-confirmed@example.invalid",
@@ -3438,8 +3948,59 @@ def self_test(args: argparse.Namespace) -> None:
         headers={},
     )
     expected_house = "user-confirmed-spam:other-confirmed@example.invalid"
+    parsed_name, parsed_address = parse_sender(
+        "", "Confirmed Sender <other-confirmed@example.invalid>",
+        {"from": "Confirmed Sender <other-confirmed@example.invalid>"},
+    )
+    if parsed_name != "Confirmed Sender" or parsed_address != "other-confirmed@example.invalid":
+        errors.append("production sender parsing did not normalize a display-name sender to its bare address")
     if junk_delete_reason(confirmed_house_project_pros, (set(), set())) != expected_house:
         errors.append("exact user-confirmed House Project Pros sender was not deleted")
+    if junk_sort_reasons(confirmed_house_project_pros, None) != (expected_house, None):
+        errors.append("sorter did not delete exact confirmed spam when correspondent lookup was unavailable")
+    protected_confirmed_cases = (
+        (replace(confirmed_house_project_pros, headers={"in-reply-to": "<forged@example.invalid>"}), (set(), set())),
+        (confirmed_house_project_pros, ({"other-confirmed@example.invalid"}, {"example.invalid"})),
+        (replace(confirmed_house_project_pros, sender_address="confirmed@example.edu"), (set(), set())),
+        (replace(confirmed_house_project_pros, sender_address="confirmed@privaterelay.appleid.com"), (set(), set())),
+        (replace(confirmed_house_project_pros, sender_address="receipt@example.shop", subject="Your receipt"), ({"receipt@example.shop"}, set())),
+    )
+    USER_CONFIRMED_SPAM_SENDERS.update({
+        "confirmed@example.edu", "confirmed@privaterelay.appleid.com", "receipt@example.shop"
+    })
+    for protected_record, protected_correspondents in protected_confirmed_cases:
+        expected = f"user-confirmed-spam:{protected_record.sender_address.casefold()}"
+        if junk_sort_reasons(protected_record, protected_correspondents) != (expected, None):
+            errors.append(f"confirmed spam was rescued by a competing protection: {protected_record.sender_address}")
+    original_sort_dependencies = {
+        name: globals()[name]
+        for name in (
+            "load_junk_messages", "state_lock", "load_state", "known_correspondents",
+            "mark_read_and_delete_mail_in_mailbox", "move_junk_mail_to_inbox", "mark_state",
+        )
+    }
+    sorter_actions: list[tuple[str, str, str, int]] = []
+    try:
+        globals()["load_junk_messages"] = lambda _limit, _body_limit: [("iCloud", "Junk", confirmed_house_project_pros)]
+        globals()["state_lock"] = lambda: contextlib.nullcontext()
+        globals()["load_state"] = lambda: {"messages": {}}
+        globals()["known_correspondents"] = lambda: None
+        globals()["mark_read_and_delete_mail_in_mailbox"] = (
+            lambda account, mailbox, mail_id: sorter_actions.append(("delete", account, mailbox, mail_id))
+        )
+        globals()["move_junk_mail_to_inbox"] = (
+            lambda account, mailbox, mail_id: sorter_actions.append(("move", account, mailbox, mail_id))
+        )
+        globals()["mark_state"] = lambda *_args, **_kwargs: None
+        sorter_output = io.StringIO()
+        with contextlib.redirect_stdout(sorter_output):
+            sort_junk(argparse.Namespace(limit=1, body_char_limit=4000, dry_run=False, pretty=False))
+        sorter_result = json.loads(sorter_output.getvalue())
+        expected_action = [("delete", "iCloud", "Junk", confirmed_house_project_pros.mail_id)]
+        if sorter_actions != expected_action or sorter_result["moved_to_inbox"] or len(sorter_result["deleted_junk"]) != 1:
+            errors.append("sort_junk did not delete exact confirmed spam without attempting an Inbox move")
+    finally:
+        globals().update(original_sort_dependencies)
     if junk_delete_reason(
         replace(confirmed_house_project_pros, sender_address="other-confirmed@lookalike.example"),
         (set(), set()),
@@ -3537,12 +4098,14 @@ def self_test(args: argparse.Namespace) -> None:
         "load_messages": load_messages,
         "known_correspondents": known_correspondents,
         "delete_mail_by_id": delete_mail_by_id,
+        "move_inbox_mail_to_junk": move_inbox_mail_to_junk,
         "mark_state": mark_state,
         "deterministic_skip_reason": deterministic_skip_reason,
     }
 
-    def run_scan_fixture(correspondent_value, delete_error: bool = False):
+    def run_scan_fixture(correspondent_value, delete_error: bool = False, records=None):
         deleted_ids: list[int] = []
+        moved_ids: list[int] = []
         marked: list[tuple[str, str, str]] = []
 
         def fixture_delete(mail_id: int) -> None:
@@ -3557,9 +4120,10 @@ def self_test(args: argparse.Namespace) -> None:
         globals()["load_state"] = lambda: {
             "messages": {scan_moved.state_key: {"status": "moved-junk-to-inbox"}}
         }
-        globals()["load_messages"] = lambda *_args, **_kwargs: scan_records
+        globals()["load_messages"] = lambda *_args, **_kwargs: scan_records if records is None else records
         globals()["known_correspondents"] = lambda: correspondent_value
         globals()["delete_mail_by_id"] = fixture_delete
+        globals()["move_inbox_mail_to_junk"] = lambda mail_id: moved_ids.append(mail_id) or "Fixture|Junk"
         globals()["mark_state"] = fixture_mark
         globals()["deterministic_skip_reason"] = lambda _record: "fixture-retained"
         stream = io.StringIO()
@@ -3570,37 +4134,59 @@ def self_test(args: argparse.Namespace) -> None:
                 scan(argparse.Namespace(limit=20, max_age_days=7, body_char_limit=4000, pretty=False))
             except SystemExit as exc:
                 exit_code = int(exc.code or 0)
-        return json.loads(stream.getvalue().splitlines()[0]), deleted_ids, marked, exit_code
+        return json.loads(stream.getvalue().splitlines()[0]), deleted_ids, moved_ids, marked, exit_code
 
     with tempfile.TemporaryDirectory() as tmp:
         globals()["STATE_DIR"] = Path(tmp)
         globals()["STATE_FILE"] = Path(tmp) / "state.json"
         globals()["LOCK_FILE"] = Path(tmp) / "state.lock"
         try:
-            scan_result, scan_deleted, scan_marked, scan_exit = run_scan_fixture(scan_known_correspondents)
+            scan_result, scan_deleted, scan_moved_to_junk, scan_marked, scan_exit = run_scan_fixture(scan_known_correspondents)
             if scan_exit != 0 or scan_deleted != [scan_bulk.mail_id]:
                 errors.append("Inbox scan did not delete exactly the unprotected bulk fixture")
+            if scan_moved_to_junk != [scan_google_one.mail_id]:
+                errors.append("Inbox scan did not route the Mail-flagged borderline fixture to Junk")
             if [item["mail_id"] for item in scan_result["deleted_junk"]] != [scan_bulk.mail_id]:
                 errors.append("Inbox scan deletion report did not match the exact deleted fixture")
-            if any(status != "deleted-junk" for _key, status, _reason in scan_marked):
-                errors.append("successful Inbox scan recorded a non-deletion terminal state")
+            if any(status not in {"deleted-junk", "moved-inbox-to-junk"} for _key, status, _reason in scan_marked):
+                errors.append("successful Inbox scan recorded an unexpected terminal state")
 
-            unavailable_result, unavailable_deleted, _unavailable_marked, unavailable_exit = run_scan_fixture(None)
-            if unavailable_exit != 0 or unavailable_deleted:
-                errors.append("Inbox scan deleted mail while correspondents were unavailable")
-            if not any(
-                item.get("reason") == "inbox-junk-kept:correspondents-unavailable"
-                for item in unavailable_result["review_items"]
-            ):
-                errors.append("Inbox scan did not visibly report its correspondents-unavailable stop")
+            unavailable_result, unavailable_deleted, unavailable_moved, unavailable_marked, unavailable_exit = run_scan_fixture(None)
+            if unavailable_exit != 0 or unavailable_deleted != [scan_bulk.mail_id]:
+                errors.append("Inbox scan did not limit deletion to exact user-confirmed spam while correspondents were unavailable")
+            expected_unavailable_moves = {scan_known.mail_id, scan_transactional.mail_id, scan_google_one.mail_id}
+            if set(unavailable_moved) != expected_unavailable_moves:
+                errors.append("Inbox scan did not route uncertain unprotected mail to Junk while correspondents were unavailable")
+            if not all(status in {"deleted-junk", "moved-inbox-to-junk"} for _key, status, _reason in unavailable_marked):
+                errors.append("Inbox scan recorded an unexpected state while correspondents were unavailable")
 
-            failed_result, failed_deleted, failed_marked, failed_exit = run_scan_fixture(
+            failed_result, failed_deleted, _failed_moved, failed_marked, failed_exit = run_scan_fixture(
                 scan_known_correspondents, delete_error=True
             )
             if failed_exit == 0 or failed_deleted or len(failed_result["action_errors"]) != 1:
                 errors.append("Inbox scan deletion failure was not surfaced with a nonzero exit")
             if not any(status == "failed" for _key, status, _reason in failed_marked):
                 errors.append("Inbox scan deletion failure was not recorded for retry")
+
+            clear_result, clear_deleted, clear_moved, clear_marked, clear_exit = run_scan_fixture(
+                (set(), set()), records=[structural_spam]
+            )
+            if clear_exit != 0 or clear_deleted != [structural_spam.mail_id] or clear_moved:
+                errors.append("Inbox scan did not delete complete unprotected structural spam")
+            if [item["reason"] for item in clear_result["deleted_junk"]] != [structural_assessment.reason]:
+                errors.append("Inbox scan did not report structural deletion evidence")
+            unknown_result, unknown_deleted, unknown_moved, unknown_marked, unknown_exit = run_scan_fixture(
+                None, records=[structural_spam]
+            )
+            if unknown_exit != 0 or unknown_deleted or unknown_moved != [structural_spam.mail_id]:
+                errors.append("Inbox scan did not fail closed to Junk when correspondent evidence was unavailable")
+            if not any(status == "moved-inbox-to-junk" for _key, status, _reason in unknown_marked):
+                errors.append("Inbox structural uncertainty was not recorded as a recoverable Junk move")
+            protected_result, protected_deleted, protected_moved, _protected_marked, protected_exit = run_scan_fixture(
+                (set(), set()), records=[threaded_structural]
+            )
+            if protected_exit != 0 or protected_deleted or protected_moved:
+                errors.append("Inbox scan acted on structurally suspicious protected mail")
         finally:
             for name, value in original_scan_globals.items():
                 globals()[name] = value

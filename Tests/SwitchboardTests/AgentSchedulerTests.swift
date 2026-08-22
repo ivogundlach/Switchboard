@@ -4,6 +4,26 @@ import Testing
 
 struct AgentSchedulerTests {
     @Test
+    func shellScriptHealthRequiresTheExactInterpreterAndScriptCommand() {
+        let script = "/Applications/Switchboard.app/Contents/Resources/Modules/desktop.smart-wake/bin/smart-wake.sh"
+        #expect(ReplacementHealthService.scriptCommandMatches(
+            expectedScriptPath: script,
+            interpreterPath: "/bin/bash",
+            actualCommandLine: "/bin/bash \(script)"
+        ))
+        #expect(!ReplacementHealthService.scriptCommandMatches(
+            expectedScriptPath: script,
+            interpreterPath: "/bin/bash",
+            actualCommandLine: "/bin/bash /tmp/foreign.sh"
+        ))
+        #expect(!ReplacementHealthService.scriptCommandMatches(
+            expectedScriptPath: script,
+            interpreterPath: "/bin/bash",
+            actualCommandLine: "/bin/zsh \(script)"
+        ))
+    }
+
+    @Test
     func intervalHonorsRunAtLoadAndElapsedTime() {
         let schedule = RuntimeSchedule(
             kind: .interval, hour: nil, minute: nil, weekday: nil,

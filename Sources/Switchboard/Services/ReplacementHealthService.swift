@@ -99,7 +99,7 @@ enum ReplacementHealthService {
                   job.healthNonce == expectedNonce,
                   job.processStartedAt != nil,
                   recordedPath == expectedExecutableURL.path,
-                  processExecutablePath(pid) == expectedExecutableURL.path,
+                  processMatchesExpectedExecutable(pid: pid, expectedURL: expectedExecutableURL),
                   now.timeIntervalSince(heartbeat) >= -5,
                   now.timeIntervalSince(heartbeat) <= maximumHealthAge else {
                 return .init(ready: false, detail: "The background replacement has not published a current heartbeat", checkedAt: now)
@@ -121,5 +121,49 @@ enum ReplacementHealthService {
                 String(decodingCString: $0, as: UTF8.self)
             }
         }
+    }
+
+    private static func processMatchesExpectedExecutable(pid: Int32, expectedURL: URL) -> Bool {
+        if processExecutablePath(pid) == expectedURL.path { return true }
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: expectedURL.path),
+              attributes[.type] as? FileAttributeType == .typeRegular,
+              let handle = try? FileHandle(forReadingFrom: expectedURL) else { return false }
+        defer { try? handle.close() }
+        let prefix = (try? handle.read(upToCount: 256)) ?? Data()
+        guard let firstLine = String(decoding: prefix, as: UTF8.self).split(whereSeparator: \.isNewline).first,
+              firstLine.hasPrefix("#!") else { return false }
+        let interpreter = firstLine.dropFirst(2).split(whereSeparator: \.isWhitespace).first.map(String.init) ?? ""
+        guard interpreter.hasPrefix("/"), processExecutablePath(pid) == interpreter else { return false }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/ps")
+        process.arguments = ["-ww", "-p", String(pid), "-o", "command="]
+        let output = Pipe()
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else { return false }
+            let command = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return scriptCommandMatches(
+                expectedScriptPath: expectedURL.path,
+                interpreterPath: interpreter,
+                actualCommandLine: command
+            )
+        } catch {
+            return false
+        }
+    }
+
+    static func scriptCommandMatches(
+        expectedScriptPath: String,
+        interpreterPath: String,
+        actualCommandLine: String
+    ) -> Bool {
+        !expectedScriptPath.isEmpty
+            && !interpreterPath.isEmpty
+            && actualCommandLine == "\(interpreterPath) \(expectedScriptPath)"
     }
 }

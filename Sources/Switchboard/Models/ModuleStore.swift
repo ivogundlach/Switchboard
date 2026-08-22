@@ -1052,7 +1052,7 @@ final class ModuleStore {
     }
 
     private func waitForReplacementHealth(_ module: ModuleDefinition) async -> Bool {
-        let deadline = Date().addingTimeInterval(50)
+        let deadline = Date().addingTimeInterval(module.id == "desktop.smart-wake" ? 90 : 50)
         var consecutiveReadyChecks = 0
         repeat {
             if replacementHealthReady(module) {

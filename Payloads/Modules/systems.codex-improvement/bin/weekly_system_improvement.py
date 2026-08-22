@@ -24,7 +24,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 
-VERSION = "1.1.5"
+VERSION = "1.1.6"
 SCHEMA_VERSION = 1
 MODEL = "gpt-5.6-sol"
 MODEL_EFFORT = "medium"
@@ -480,9 +480,8 @@ def collect_evidence() -> tuple[list[dict], dict]:
     commands = [
         run_command("transcript-distill", [str(MODULES_DIR / "systems.memory/bin/memory-transcript-distill"), "--status"], 60,
                     timeout_retries=1),
-        run_command("memory-lint", [str(MODULES_DIR / "systems.memory/bin/memory-lint")], 60,
-                    nonzero_is_evidence=True, env={"HOME": str(HOME), "MEMORY_ROOT": str(MEMORY_ROOT), "PATH": "/usr/bin:/bin", "LANG": "en_US.UTF-8"},
-                    timeout_retries=1),
+        run_command("memory-lint", [str(MODULES_DIR / "systems.memory/bin/memory-lint")], 300,
+                    nonzero_is_evidence=True, env={"HOME": str(HOME), "MEMORY_ROOT": str(MEMORY_ROOT), "PATH": "/usr/bin:/bin", "LANG": "en_US.UTF-8"}),
         run_command("skill-drift", [str(SCRIPT_DIR / "skill-drift-check"), "--check", "--json"], 900),
         run_command("scriptify", ["/usr/bin/python3", str(HOME / ".codex/skills/tool skills/scriptify/scripts/mine-logs.py"), "--days", "14", "--top", "15"], 900),
         run_command("codex-sync", [str(SCRIPT_DIR / "codex-sync-verify")], 120, nonzero_is_evidence=True),

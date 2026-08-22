@@ -30,7 +30,9 @@ struct LegacyUpgradeComponentEvidence: Identifiable, Equatable {
 
     var id: String { component.id }
     var isDetected: Bool { detection != .notFound }
-    var isMigratable: Bool { isDetected && detection != .unresolved && component.disposition == .migrate }
+    var isMigratable: Bool {
+        isDetected && detection != .unresolved && detection != .alreadyRetired && component.disposition == .migrate
+    }
 }
 
 struct LegacyUpgradeModuleReview: Identifiable, Equatable {
@@ -38,6 +40,7 @@ struct LegacyUpgradeModuleReview: Identifiable, Equatable {
     let contract: UpgradeMigrationModule
     let components: [LegacyUpgradeComponentEvidence]
     let legacyEnabled: Bool
+    let wasPreviouslyImported: Bool
     let alreadyEnabledInSwitchboard: Bool
     let legacySettingsSummary: [String]
 
@@ -47,7 +50,11 @@ struct LegacyUpgradeModuleReview: Identifiable, Equatable {
     var hasRetainedEvidence: Bool {
         components.contains { $0.isDetected && $0.component.disposition == .retain }
     }
-    var recommendedSelected: Bool { hasMigratableEvidence }
+    var recommendedSelected: Bool {
+        hasMigratableEvidence
+            || (wasPreviouslyImported && !alreadyEnabledInSwitchboard)
+            || (contract.settingsPolicy == .sharedCanonical && !alreadyEnabledInSwitchboard)
+    }
 }
 
 struct LegacyUpgradeReviewPlan: Equatable {
@@ -55,7 +62,7 @@ struct LegacyUpgradeReviewPlan: Equatable {
     let createdAt: Date
 
     var shouldPresentOnUserLaunch: Bool {
-        modules.contains { $0.hasMigratableEvidence }
+        modules.contains { $0.hasMigratableEvidence || $0.recommendedSelected }
     }
 }
 
@@ -119,6 +126,7 @@ enum LegacyUpgradeScanner {
                 contract: moduleContract,
                 components: components,
                 legacyEnabled: legacyEnabled,
+                wasPreviouslyImported: snapshot.importedModuleIDs.contains(module.id),
                 alreadyEnabledInSwitchboard: enabledSwitchboardIDs.contains(module.id),
                 legacySettingsSummary: settings
             )
@@ -204,7 +212,7 @@ enum LegacyUpgradeScanner {
     ) -> LegacyUpgradeComponentEvidence {
         if snapshot.importedModuleIDs.contains(module.id), component.disposition == .migrate,
            component.kind == .command || component.kind == .service || component.kind == .preference || component.kind == .shortcut {
-            return .init(component: component, detection: .notFound, detail: "Already imported into Switchboard.")
+            return .init(component: component, detection: .alreadyRetired, detail: "Already imported into Switchboard.")
         }
         if component.disposition == .alreadyRetired {
             let exists = component.canonicalPath.map(snapshot.existingPaths.contains) ?? false

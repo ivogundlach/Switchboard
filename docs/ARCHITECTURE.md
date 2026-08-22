@@ -12,7 +12,7 @@ Switchboard is a manifest-driven menu-bar app for macOS 26 on Apple silicon. One
 
 ## First-run and state precedence
 
-On a normal first launch, `LegacyUpgradeScanner` builds an exact-component review. Existing legacy state and settings take precedence once; module contracts then record what was imported. The user confirms once, after which the selected migrations run. A login/background launch does not open the review window.
+On every launch, `LegacyUpgradeScanner` builds an exact-component inventory. Existing legacy state and settings take precedence once; module contracts record what was imported, and `AutomaticUpgradeStatus` stores a private ledger covering every component. Migration starts automatically when its exact permission gates are ready. A login/background launch remains hidden, performs the same safe migration attempt, and leaves any user-approval blocker for the next visible onboarding session.
 
 The review is intentionally explicit: every detected component is classified `migrate`, `retain`, or `alreadyRetired`. A retained or unresolved job stays active and visible. A component is never removed merely because another component in its module migrated.
 
@@ -30,7 +30,7 @@ There is no blanket Full Disk Access request. Administrator approval is deferred
 
 ## Migration transaction
 
-The onboarding review has one confirmation for all selected modules. Execution then uses one global lock and a separate durable transaction per module. A module commits only after its own replacement proves healthy, so a failure cannot retire a different module's legacy app.
+Execution uses one global lock and a separate durable transaction per module. A module commits only after its own replacement passes an explicit operational probe, so a failure cannot retire a different module's legacy app.
 
 `OperationCoordinator` serializes migration, restore, update, and helper changes. A selected component follows this shape:
 

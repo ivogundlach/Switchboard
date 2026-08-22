@@ -1,4 +1,59 @@
 #!/bin/bash
+set -u
+
+NAME="notebooklm-sync"
+VERSION="1.0.0"
+CODE_DIR="${NOTEBOOKLM_CODE_DIR:-$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)}"
+
+usage() {
+    cat <<'EOF'
+Usage: sync_all.sh [--help|--version|--self-test] [sync options]
+
+Synchronize NotebookLM into local files. State and logs stay in
+NOTEBOOKLM_SYNC_DIR; the sync program is loaded from this bundled directory.
+EOF
+}
+
+self_test() {
+    local required
+    for required in sync_all.sh notebooklm_sync.py; do
+        [ -f "${CODE_DIR}/${required}" ] || {
+            printf 'missing bundled file: %s\n' "${CODE_DIR}/${required}" >&2
+            return 1
+        }
+    done
+    if ! /bin/bash -n "${CODE_DIR}/sync_all.sh"; then
+        return 1
+    fi
+    if ! /usr/bin/python3 - "${CODE_DIR}/notebooklm_sync.py" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+compile(path.read_text(), str(path), "exec")
+PY
+    then
+        return 1
+    fi
+    printf 'NotebookLM sync self-test passed\n'
+}
+
+case "${1:-}" in
+    --help|-h)
+        usage
+        exit 0
+        ;;
+    --version|-V)
+        printf '%s %s\n' "$NAME" "$VERSION"
+        exit 0
+        ;;
+    --self-test)
+        self_test
+        exit $?
+        ;;
+esac
+
+NOTEBOOKLM_SYNC_ARGS=("$@")
 
 if [[ "${NOTEBOOKLM_POWER_SOURCE:-}" == "battery" ]] ||
    { [[ "${NOTEBOOKLM_POWER_SOURCE:-}" != "ac" ]] &&
@@ -46,7 +101,11 @@ fi
 
 if auth_ok; then
     echo "Running NotebookLM Sync..." >> "$LOG_FILE"
-    NOTEBOOKLM_BIN="$NOTEBOOKLM_BIN" /usr/bin/python3 "$SYNC_DIR/notebooklm_sync.py" >> "$LOG_FILE" 2>&1
+    if [ "$#" -gt 0 ]; then
+        NOTEBOOKLM_BIN="$NOTEBOOKLM_BIN" NOTEBOOKLM_CODE_DIR="$CODE_DIR" /usr/bin/python3 "$CODE_DIR/notebooklm_sync.py" "${NOTEBOOKLM_SYNC_ARGS[@]}" >> "$LOG_FILE" 2>&1
+    else
+        NOTEBOOKLM_BIN="$NOTEBOOKLM_BIN" NOTEBOOKLM_CODE_DIR="$CODE_DIR" /usr/bin/python3 "$CODE_DIR/notebooklm_sync.py" >> "$LOG_FILE" 2>&1
+    fi
 elif ! network_up; then
     # Machine is offline — NOT an auth problem. Skip quietly; the next hourly
     # run retries. Deliberately no notification.

@@ -1,9 +1,12 @@
 #!/bin/bash
 set -euo pipefail
 
+SCRIPT_PATH="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$0")"
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd -P)"
+
 case "${1:---version}" in
   --version|-V)
-    exec "${WEEKLY_SYSTEM_IMPROVEMENT_BIN:-${HOME:-$(cd && pwd -P)}/.local/bin/weekly-system-improvement}" --health
+    exec "${WEEKLY_SYSTEM_IMPROVEMENT_BIN:-$SCRIPT_DIR/weekly-system-improvement}" --health
     ;;
   --help|-h)
     printf '%s\n' 'weekly-system-improvement-health --version'

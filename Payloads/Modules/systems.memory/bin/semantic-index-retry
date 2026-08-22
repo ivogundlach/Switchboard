@@ -12,7 +12,9 @@
 # tool's own notify fires and the next scheduled day retries; retrying here is harmless.
 set -uo pipefail
 PHASE="${1:?usage: semantic-index-retry --semantic-only}"
-TOOL="$HOME/.memory/tools/memory-semantic-build"
+SCRIPT_PATH="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$0")"
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd -P)"
+TOOL="$SCRIPT_DIR/memory-semantic-build"
 ATTEMPTS="${SEMANTIC_RETRY_ATTEMPTS:-6}"
 INTERVAL="${SEMANTIC_RETRY_INTERVAL:-600}"
 DEFER_RC=75

@@ -12,7 +12,10 @@
 # snapshot that touched the app. Descriptive, model-written messages start with
 # the nightly app-repo-sync from here on, so there is no inference backlog.
 set -uo pipefail
-export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+
+SCRIPT_PATH="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$0")"
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd -P)"
 
 NAME="app-repo-bootstrap"
 VERSION="1.0.0"
@@ -25,7 +28,7 @@ case "${1:-}" in
 esac
 
 # shellcheck source=/dev/null
-. "$HOME/.local/bin/app-repo-lib.sh"
+. "$SCRIPT_DIR/app-repo-lib.sh"
 
 mkdir -p "$STATE"
 LOG="$STATE/bootstrap.log"
@@ -47,6 +50,7 @@ done
 
 command -v gh >/dev/null 2>&1 || { echo "gh CLI required" >&2; exit 1; }
 gh auth status >/dev/null 2>&1 || { echo "gh not authenticated" >&2; exit 1; }
+ensure_repo_identity || exit 1
 
 ARCHIVE=""
 cleanup() { [ -n "$ARCHIVE" ] && rm -rf "$ARCHIVE"; }

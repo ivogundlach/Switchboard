@@ -53,7 +53,7 @@
       "legacyComponents": [
         {"id":"smart-wake-launch-agent","displayName":"Smart Wake LaunchAgent","kind":"launchAgent","disposition":"migrate","label":"com.user.smartwake"},
         {"id":"smart-wake-discord-launch-agent","displayName":"Smart Wake Discord LaunchAgent","kind":"launchAgent","disposition":"migrate","label":"com.user.smartwake.discord"},
-        {"id":"smart-wake-discord-watcher-app","displayName":"Smart Wake Discord Watcher app","kind":"appBundle","disposition":"migrate","canonicalPath":"/Applications/Smart Wake Discord Watcher.app","bundleID":"com.ivo.smartwake.discord-watcher","executableName":"Smart Wake Discord Watcher"},
+        {"id":"smart-wake-discord-watcher-app","displayName":"Smart Wake Discord Watcher app","kind":"appBundle","disposition":"migrate","canonicalPath":"/Applications/Smart Wake Discord Watcher.app","bundleID":"com.ivo.smartwake.discord-watcher","executableName":"discord-watcher"},
         {"id":"smart-wake-command","displayName":"Smart Wake command family","kind":"command","disposition":"migrate"},
         {"id":"smart-wake-imessage-launch-agent","displayName":"Smart Wake iMessage LaunchAgent","kind":"launchAgent","disposition":"retain","label":"com.user.smartwake.imessage"},
         {"id":"smart-wake-sleep-guard-launch-agent","displayName":"Smart Wake sleep guard","kind":"launchAgent","disposition":"retain","label":"com.user.smartwake.sleep-guard"}
@@ -104,7 +104,7 @@
       "settingsPolicy": "legacyOnce",
       "replacementHealth": "verified",
       "legacyComponents": [
-        {"id":"auto-install-dmg-app","displayName":"AutoInstall DMG app","kind":"appBundle","disposition":"migrate","canonicalPath":"/Applications/AutoInstall DMG.app","bundleID":"com.ivogundlach.autoinstalldmg","executableName":"AutoInstall DMG"}
+        {"id":"auto-install-dmg-app","displayName":"AutoInstall DMG app","kind":"appBundle","disposition":"migrate","canonicalPath":"/Applications/AutoInstall DMG.app","bundleID":"com.ivogundlach.autoinstalldmg","executableName":"droplet"}
       ],
       "permissions": [
         {"id":"auto-install-dmg-app-management","displayName":"AutoInstall DMG app management","subject":"Switchboard","mechanism":"appManagementAttestation","settingsURL":"x-apple.systempreferences:com.apple.preference.security?Privacy_AppBundles","detail":"Confirm that Switchboard is the signed app managing the AutoInstall DMG migration."}

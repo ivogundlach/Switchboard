@@ -24,9 +24,12 @@
 # because launchd jobs hold no TCC grant and a protected directory blocks instead
 # of failing. A weekly job that can hang forever is worse than no weekly job.
 set -uo pipefail
-export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 
-TOOLS="$HOME/.memory/tools"
+SCRIPT_PATH="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$0")"
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd -P)"
+
+TOOLS="$SCRIPT_DIR"
 STATE="$HOME/.local/state/memory-health-weekly"
 mkdir -p "$STATE"
 LOG="$STATE/run.log"
@@ -75,11 +78,15 @@ if [ -x "$VEC_PY" ]; then
 else
   log "vectors skipped (no venv at $VEC_PY; search runs on keyword arms)"
 fi
-# The contract suite, in full — including the corpus walk the dashboard's 5s
-# health check cannot afford. This run is what refreshes the stamp that
-# `memory-selftest --version` reads, so if this job stops running the dashboard
-# reports the suite stale instead of quietly reporting nothing at all.
-bounded 120 contracts python3 "$HOME/.memory/tests/run-all"
+# Run the self-tests shipped with this bundle. The former external run-all suite
+# was not part of the installed payload, so it could never run reliably from
+# the scheduled process. These checks exercise the bundled tools without relying
+# on an unbundled test tree.
+bounded 120 lint "$TOOLS/memory-lint"
+bounded 120 transcript-selftest python3 "$TOOLS/transcript_distill.py" --selftest
+bounded 120 search-selftest "$TOOLS/memory-search" --version
+bounded 120 query-selftest python3 "$TOOLS/memory-semantic-query" --version
+bounded 120 secret-scan python3 "$TOOLS/memory-secret-scan" --version
 MEMORY_EVAL_EXIT_OK=1 bounded 600 retrieval python3 "$TOOLS/memory-retrieval-eval"
 log "done"
 exit 0

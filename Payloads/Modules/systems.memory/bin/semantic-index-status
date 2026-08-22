@@ -9,8 +9,9 @@
 # calls. Judge health by status files + DB freshness + overall_rc, which is what this
 # prints. Read-only; safe to run anytime.
 #
-#   usage: semantic-index-status [--auth]
+#   usage: semantic-index-status [--auth|--structural]
 #     --auth   also run the live agy auth probe (~8s) the scheduler uses before each run
+#     --structural verify only the local database structure used by Switchboard
 import json, os, sqlite3, sys, time, datetime
 from pathlib import Path
 
@@ -121,6 +122,10 @@ def auth_probe():
 
 if __name__ == "__main__":
     print("semantic index health  —  " + datetime.datetime.now().strftime("%Y-%m-%d %H:%M"))
+    if "--structural" in sys.argv:
+        db_report()
+        print(f"\nVERDICT: {'✓ STRUCTURALLY HEALTHY' if WARN == 0 else f'⚠ {WARN} structural warning(s)'}")
+        sys.exit(1 if WARN else 0)
     report_phase("SEMANTIC phase", SEM_STATUS,   max_days=2)
     db_report()
     next_fire()

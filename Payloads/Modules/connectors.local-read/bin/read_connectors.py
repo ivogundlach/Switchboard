@@ -3,6 +3,7 @@ import argparse
 import json
 import sqlite3
 import subprocess
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlparse
@@ -274,6 +275,16 @@ def youtube(args):
 
 
 def main():
+    if len(sys.argv) == 2 and sys.argv[1] == "--self-test":
+        required = [
+            HOME / "Library",
+            Path("/usr/bin/python3"),
+        ]
+        missing = [str(path) for path in required if not path.exists()]
+        if missing:
+            raise SystemExit("missing required local-read foundation: " + ", ".join(missing))
+        print("local-read self-test: PASS")
+        return
     parser = argparse.ArgumentParser(description="Read-only local connectors for Codex.")
     sub = parser.add_subparsers(dest="command", required=True)
 

@@ -17,6 +17,29 @@
 # else ASK THE AUTHORITATIVE CHECK (`auth check --test` does a live token fetch)
 # before telling anyone to re-authenticate.
 
+NAME="notebooklm-auth-keepalive"
+VERSION="1.0.0"
+
+usage() {
+    cat <<'EOF'
+Usage: auth_keepalive.sh [--help|--version|--selftest]
+
+Refresh the NotebookLM authentication session. --selftest checks only the
+error classifier and performs no authentication or file writes.
+EOF
+}
+
+case "${1:-}" in
+    --help|-h)
+        usage
+        exit 0
+        ;;
+    --version|-V)
+        printf '%s %s\n' "$NAME" "$VERSION"
+        exit 0
+        ;;
+esac
+
 HOME_DIR="${HOME:-$(cd && pwd -P)}"
 BIN="${NOTEBOOKLM_BIN:-$(command -v notebooklm 2>/dev/null || printf '%s' notebooklm)}"
 LOG="${NOTEBOOKLM_AUTH_LOG:-${HOME_DIR}/.local/state/notebooklm-sync/auth_keepalive.log}"

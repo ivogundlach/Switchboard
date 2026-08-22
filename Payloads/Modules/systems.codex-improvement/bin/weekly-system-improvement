@@ -2,6 +2,8 @@
 set -euo pipefail
 
 HOME_DIR="${HOME:-$(cd && pwd -P)}"
-export PATH="${HOME_DIR}/.local/bin:${PATH:-/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}"
+SCRIPT_PATH="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$0")"
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd -P)"
+export PATH="${PATH:-/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}"
 export MEMORY_ROOT="${MEMORY_ROOT:-${HOME_DIR}/.memory}"
-exec "${WEEKLY_SYSTEM_IMPROVEMENT_PYTHON:-/usr/bin/python3}" "${WEEKLY_SYSTEM_IMPROVEMENT_SCRIPT:-${MEMORY_ROOT}/tools/weekly_system_improvement.py}" "$@"
+exec "${WEEKLY_SYSTEM_IMPROVEMENT_PYTHON:-/usr/bin/python3}" "${WEEKLY_SYSTEM_IMPROVEMENT_SCRIPT:-${SCRIPT_DIR}/weekly_system_improvement.py}" "$@"

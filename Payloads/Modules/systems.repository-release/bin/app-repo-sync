@@ -13,12 +13,15 @@
 # set, and a deletion circuit breaker — per commit, before it is written.
 # Backup never depends on model access.
 set -uo pipefail
-export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+
+SCRIPT_PATH="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$0")"
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd -P)"
 
 NAME="app-repo-sync"
 VERSION="1.2.0"
 # shellcheck source=/dev/null
-. "$HOME/.local/bin/app-repo-lib.sh"
+. "$SCRIPT_DIR/app-repo-lib.sh"
 
 mkdir -p "$STATE"
 LOG="$STATE/app-repo-sync.log"
@@ -56,6 +59,8 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+
+ensure_repo_identity || exit 1
 
 write_status() {
   local result="$1" detail="$2"

@@ -36,10 +36,11 @@ score its own paperwork instead of the memory system. This is not theoretical:
 it happened on the first run, via the capture that documented the eval.
 """
 import json, os, re, subprocess, sys
+from pathlib import Path
 
 ROOT = os.environ.get("MEMORY_ROOT", os.path.expanduser("~/.memory"))
 GOLD = os.path.join(ROOT, "evals", "retrieval-gold.jsonl")
-QUERY = os.path.join(ROOT, "tools", "memory-semantic-query")
+QUERY = str(Path(__file__).resolve().with_name("memory-semantic-query"))
 STATE = os.path.expanduser("~/.local/state/memory-retrieval-eval")
 MIN_R5 = float(os.environ.get("MEMORY_EVAL_MIN_RECALL5", "0.80"))
 TOPK = 5

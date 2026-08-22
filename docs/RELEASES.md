@@ -2,9 +2,9 @@
 
 ## Status
 
-The current release target is `v0.2.4`, with **147 tests in 22 suites**. The Developer ID Application certificate for Team `Q2X7X86GYR` is available. Publication is complete only when the notarized, stapled DMG and its matching update manifest are visible together on GitHub Releases.
+The current release target is `v0.2.5`, with **158 tests in 26 suites**. The Developer ID Application certificate for Team `Q2X7X86GYR` is available. Publication is complete only when the notarized, stapled DMG and its matching update manifest are visible together on GitHub Releases.
 
-`v0.2.4` waits for launchd to finish retiring or restoring an exact legacy job instead of treating its asynchronous state change as a failure. Onboarding permission blockers and module failures now move their exact inline explanation into view, and unrelated module alerts stay out of the migration sheet.
+`v0.2.5` automatically inventories and migrates detected standalone utilities, commands, Services, and background jobs after their exact permissions are ready. It preserves imported settings and enabled state, records all 46 component outcomes, verifies every enabled module through an explicit operational probe, and retires an old owner only after that probe passes. Onboarding moves the exact permission or module failure into view. Bundled scheduled workers now execute their bundled first-party code instead of depending on old standalone installation paths.
 
 ## Local verification
 
@@ -31,6 +31,8 @@ Before publishing an immutable GitHub release, all of these must have current ev
 7. Explicit authorization to publish.
 
 Until then, describe the build as local and the release machinery as implemented; do not present a download or update feed as available.
+
+A clean exact tag can be notarized for installation testing without publishing by supplying `--output-dir` and omitting `--publish`. The same tag is published only after that installed build passes migration and health verification on the current Mac.
 
 ## Update behavior
 

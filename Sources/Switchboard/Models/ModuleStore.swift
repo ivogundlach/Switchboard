@@ -90,6 +90,11 @@ final class ModuleStore {
     private var activeUpgradeLock: UpgradeExecutionLock?
     @ObservationIgnored
     private var upgradeAttentionSequence = 0
+    private(set) var operationalHealth: [String: ModuleOperationalHealth] = [:]
+    @ObservationIgnored
+    private lazy var automaticUpgradeStatusStore = AutomaticUpgradeStatusStore(
+        applicationSupportURL: applicationSupportURL
+    )
 
     var warmCornersRuntimeReady: Bool { warmCornerRuntime.isRunning }
 
@@ -224,6 +229,70 @@ final class ModuleStore {
         }
         synchronizeAgentRegistration()
         await resumeKineticsHandoffIfNeeded()
+        await refreshEnabledModuleHealth()
+    }
+
+    func performAutomaticUpgradeIfReady() async {
+        guard CanonicalInstallGate.isCanonical() else { return }
+        refreshUpgradePlan()
+        let selected = AutomaticUpgradePolicy.selectedModuleIDs(from: upgradePlan)
+        let createdAt = Date()
+        var status = AutomaticUpgradeStatus(
+            schemaVersion: 1,
+            createdAt: createdAt,
+            updatedAt: createdAt,
+            phase: .scanned,
+            selectedModuleIDs: selected.sorted(),
+            components: AutomaticUpgradePolicy.componentRecords(from: upgradePlan),
+            permissionBlockers: [],
+            moduleResults: [:],
+            failure: nil
+        )
+
+        func persist() {
+            status.updatedAt = Date()
+            do {
+                try automaticUpgradeStatusStore.save(status)
+            } catch {
+                lastError = "Automatic upgrade status could not be saved: \(error.localizedDescription)"
+            }
+        }
+
+        persist()
+        guard !selected.isEmpty else {
+            status.phase = .completed
+            persist()
+            return
+        }
+
+        upgradeSelectedModuleIDs = selected
+        refreshPermissionReviews()
+        let blockers = upgradePermissionReviews.filter { $0.readiness.isBlocking }
+        guard blockers.isEmpty else {
+            status.phase = .waitingForPermissions
+            status.permissionBlockers = blockers.map { "\($0.permission.displayName): \($0.readiness.label)" }
+            persist()
+            return
+        }
+
+        status.phase = .running
+        persist()
+        upgradeState = .confirmed
+        await performConfirmedUpgrade()
+        status.moduleResults = upgradeResults
+        switch upgradeState {
+        case .completed:
+            status.phase = .completed
+        case .completedWithIssues:
+            status.phase = .completedWithIssues
+        case .failed(let message):
+            status.phase = .failed
+            status.failure = message
+        default:
+            status.phase = .failed
+            status.failure = "Automatic upgrade ended in an incomplete state."
+        }
+        persist()
     }
 
     var groups: [String] {
@@ -275,9 +344,14 @@ final class ModuleStore {
         }
 
         if enabled {
-            Task { _ = await enableModule(module) }
+            Task {
+                if await enableModule(module) == nil {
+                    await refreshOperationalHealth(for: module)
+                }
+            }
         } else {
             disableModule(module)
+            operationalHealth[module.id] = nil
         }
     }
 
@@ -286,22 +360,12 @@ final class ModuleStore {
             return .unavailable(module.availability.label)
         }
         if isEnabled(module) {
-            switch module.id {
-            case "desktop.warm-corners":
-                return warmCornerRuntime.isRunning
-                    ? .ready(warmCorners.hasAnyCornerSet ? "Running" : "Running · no corners assigned")
-                    : .unavailable("Enabled · watcher stopped")
-            case "desktop.audio-guard":
-                return audioGuard.isRunning ? .ready("Watching audio output") : .unavailable("Enabled · watcher stopped")
-            case "desktop.brightness":
-                return brightness.isRunning ? .ready("Ready") : .unavailable("Enabled · controller stopped")
-            case "desktop.kinetics":
-                return kinetics.isReady
-                    ? .ready("Ready · Switchboard agent owns background runtime")
-                    : .unavailable("Enabled · companion unavailable")
-            default:
-                return .ready("Enabled")
+            guard let verified = operationalHealth[module.id] else {
+                return .unavailable("Enabled · operational check pending")
             }
+            return verified.ready
+                ? .ready(verified.detail)
+                : .unavailable("Enabled · \(verified.detail)")
         }
         return .disabled("Off")
     }
@@ -750,7 +814,10 @@ final class ModuleStore {
 
         for review in upgradePlan.modules where upgradeSelectedModuleIDs.contains(review.module.id) {
             let migratable = review.components.filter(\.isMigratable)
-            guard !migratable.isEmpty || !review.hasLegacyEvidence else { continue }
+            guard !migratable.isEmpty || !review.hasLegacyEvidence || review.wasPreviouslyImported
+                    || review.contract.settingsPolicy == .sharedCanonical else {
+                continue
+            }
             upgradeState = .running(review.module.id, "Preparing \(review.module.name)")
             var stoppedApps: [UpgradeStoppedLegacyApp] = []
             var kineticsHandoff: KineticsUpgradeHandoffRecord?
@@ -980,7 +1047,11 @@ final class ModuleStore {
         repeat {
             if replacementHealthReady(module) {
                 consecutiveReadyChecks += 1
-                if consecutiveReadyChecks >= 5 { return true }
+                if consecutiveReadyChecks >= 5 {
+                    let functional = await ModuleOperationalHealthService.runProbes(for: module.id)
+                    operationalHealth[module.id] = functional
+                    return functional.ready
+                }
             } else {
                 consecutiveReadyChecks = 0
             }
@@ -991,11 +1062,25 @@ final class ModuleStore {
 
     private func replacementHealthReady(_ module: ModuleDefinition) -> Bool {
         let bundle = Bundle.main.bundleURL
-        guard let nonce = upgradeHealthNonces[module.id] ?? healthNonce(moduleID: module.id) else {
-            return false
-        }
+        let activation = ModuleOperationalHealthService.activationReady(
+            moduleID: module.id,
+            commandNames: commands(for: module),
+            serviceNames: services(for: module).map(\.name),
+            ownsScheduledJobs: scheduledModuleIDs.contains(module.id),
+            agentEnabled: agentRegistration.status == .enabled,
+            bundleURL: bundle
+        )
+        guard activation.ready else { return false }
+        let nonce = upgradeHealthNonces[module.id] ?? healthNonce(moduleID: module.id)
         switch module.id {
+        case "desktop.warm-corners":
+            return warmCornerRuntime.isRunning
+        case "desktop.audio-guard":
+            return audioGuard.isRunning
+        case "desktop.brightness":
+            return brightness.isRunning
         case "desktop.kinetics":
+            guard let nonce else { return false }
             let executable = bundle.appending(path: "Contents/Resources/Companions/Kinetics.app/Contents/MacOS/Kinetics")
             return ReplacementHealthService.helperCapability(
                 named: "Kinetics",
@@ -1008,6 +1093,7 @@ final class ModuleStore {
                 expectedNonce: nonce
             ).ready
         case "desktop.quit-on-close":
+            guard let nonce else { return false }
             let executable = bundle.appending(path: "Contents/Resources/Helpers/quit-on-close")
             return ReplacementHealthService.helperCapability(
                 named: "QuitOnClose",
@@ -1016,6 +1102,7 @@ final class ModuleStore {
                 expectedNonce: nonce
             ).ready
         case "desktop.smart-wake":
+            guard let nonce else { return false }
             return ReplacementHealthService.continuousAgentJob(
                 label: "com.user.smartwake",
                 expectedExecutableURL: bundle.appending(path: "Contents/Resources/Modules/desktop.smart-wake/bin/smart-wake.sh"),
@@ -1032,10 +1119,30 @@ final class ModuleStore {
             )
             if case .ready = readiness { return true }
             return false
+        case "files.auto-install-dmg", "links.copy-safari-url", "connectors.local-read",
+             "systems.memory", "systems.codex-improvement", "systems.repository-release",
+             "systems.notebooklm", "systems.backup-audit", "systems.advanced-commands":
+            return true
         default:
-            if case .ready = health(for: module) { return true }
-            return isEnabled(module)
+            return false
         }
+    }
+
+    private func refreshEnabledModuleHealth() async {
+        for module in manifest.modules where enabledModuleIDs.contains(module.id) {
+            await refreshOperationalHealth(for: module)
+        }
+    }
+
+    private func refreshOperationalHealth(for module: ModuleDefinition) async {
+        guard replacementHealthReady(module) else {
+            operationalHealth[module.id] = .init(
+                ready: false,
+                detail: "replacement ownership or runtime is not ready"
+            )
+            return
+        }
+        operationalHealth[module.id] = await ModuleOperationalHealthService.runProbes(for: module.id)
     }
 
     private func markUpgradeImported(_ moduleID: String) {

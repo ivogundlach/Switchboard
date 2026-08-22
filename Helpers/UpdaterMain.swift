@@ -6,6 +6,12 @@ enum SwitchboardUpdaterMain {
     static func main() {
         do {
             let request = try UpdateHelperRequest(arguments: CommandLine.arguments)
+            guard UpdateParentPolicy.isDirectParent(
+                requestedPID: request.parentPID,
+                actualParentPID: getppid()
+            ) else {
+                throw UpdateInstallerError.parentIdentityMismatch
+            }
             let parent = try ProcessIdentityReader.identity(pid: request.parentPID)
             guard parent.resolvedExecutableURL == UpdateInstallerConstants.canonicalExecutableURL.standardizedFileURL else {
                 throw UpdateInstallerError.invalidParentExecutable(parent.resolvedExecutableURL)

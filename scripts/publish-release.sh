@@ -9,20 +9,23 @@ IDENTITY_PREFIX="Developer ID Application:"
 
 usage() {
   printf '%s\n' \
-    "Usage: scripts/publish-release.sh --version X.Y.Z --notary-profile NAME --publish" \
+    "Usage: scripts/publish-release.sh --version X.Y.Z --notary-profile NAME [--output-dir DIR] [--publish]" \
     "" \
     "Builds, Developer ID-signs, notarizes, audits, and publishes one immutable" \
-    "GitHub release containing Switchboard-X.Y.Z-macOS.dmg and Switchboard-update.json." \
+    "notarized Switchboard-X.Y.Z-macOS.dmg and Switchboard-update.json artifacts." \
+    "Without --publish, --output-dir is required and no GitHub state changes." \
     "The source checkout must be clean and exactly tagged vX.Y.Z."
 }
 
 version=""
 notary_profile=""
 publish=0
+output_dir=""
 while (($#)); do
   case "$1" in
     --version) version="${2:-}"; shift 2 ;;
     --notary-profile) notary_profile="${2:-}"; shift 2 ;;
+    --output-dir) output_dir="${2:-}"; shift 2 ;;
     --publish) publish=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) printf 'Unknown argument: %s\n' "$1" >&2; usage >&2; exit 2 ;;
@@ -37,8 +40,8 @@ if [[ -z "$notary_profile" ]]; then
   printf 'A notarytool keychain profile is required.\n' >&2
   exit 2
 fi
-if ((publish != 1)); then
-  printf 'Publishing is external and irreversible; rerun with --publish after reviewing the exact version.\n' >&2
+if ((publish != 1)) && [[ -z "$output_dir" ]]; then
+  printf 'A local preparation requires --output-dir; GitHub publishing additionally requires --publish.\n' >&2
   exit 2
 fi
 
@@ -53,10 +56,13 @@ if [[ ! "$identity_hash" =~ ^[0-9A-Fa-f]{40}$ ]]; then
   exit 3
 fi
 
-for command in swift codesign hdiutil xcrun gh jq shasum ditto plutil; do
+for command in swift codesign hdiutil xcrun jq shasum ditto plutil; do
   command -v "$command" >/dev/null || { printf 'Required command is missing: %s\n' "$command" >&2; exit 4; }
 done
-gh auth status >/dev/null
+if ((publish == 1)); then
+  command -v gh >/dev/null || { printf 'Required command is missing: gh\n' >&2; exit 4; }
+  gh auth status >/dev/null
+fi
 if ! git -C "$ROOT" diff --quiet || ! git -C "$ROOT" diff --cached --quiet \
   || [[ -n "$(git -C "$ROOT" ls-files --others --exclude-standard)" ]]; then
   printf 'Release checkout must be clean; build from the exact committed tag.\n' >&2
@@ -67,7 +73,7 @@ if [[ "$exact_tag" != "v$version" ]]; then
   printf 'Release checkout must be exactly tagged v%s.\n' "$version" >&2
   exit 5
 fi
-if gh release view "v$version" --repo "$REPOSITORY" >/dev/null 2>&1; then
+if ((publish == 1)) && gh release view "v$version" --repo "$REPOSITORY" >/dev/null 2>&1; then
   printf 'Release v%s already exists; refusing to replace an immutable release.\n' "$version" >&2
   exit 5
 fi
@@ -147,7 +153,20 @@ jq -n \
 jq -e '.schemaVersion == 1 and (.dmgSHA256 | test("^[0-9a-f]{64}$"))' "$manifest" >/dev/null
 
 notes="$release_root/release-notes.md"
-printf '# Switchboard %s\n\nSigned with Apple Developer ID, notarized, and verified for Apple silicon on macOS 26 or later. First launch presents one review of detected legacy utilities and only the permissions required by selected modules.\n' "$version" >"$notes"
+printf '# Switchboard %s\n\nSigned with Apple Developer ID, notarized, and verified for Apple silicon on macOS 26 or later. This update automatically imports detected standalone utilities, settings, commands, Services, and background jobs when their exact permissions are ready. Old owners are retired only after the bundled replacement passes its operational health check; permission blockers are brought directly into view during onboarding.\n' "$version" >"$notes"
+
+if [[ -n "$output_dir" ]]; then
+  mkdir -p "$output_dir"
+  output_dir="$(cd "$output_dir" && pwd -P)"
+  ditto "$dmg" "$output_dir/$dmg_name"
+  ditto "$manifest" "$output_dir/Switchboard-update.json"
+  ditto "$notes" "$output_dir/release-notes.md"
+fi
+
+if ((publish != 1)); then
+  printf 'Prepared notarized release artifacts in %s\n' "$output_dir"
+  exit 0
+fi
 
 # Keep an incomplete release hidden from update discovery. Publish only after
 # GitHub reports the exact immutable asset pair on the draft.

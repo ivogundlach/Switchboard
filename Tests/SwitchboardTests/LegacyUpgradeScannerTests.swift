@@ -85,6 +85,70 @@ struct LegacyUpgradeScannerTests {
         )
         let commands = try #require(plan.modules.first { $0.module.id == "systems.advanced-commands" })
         #expect(!commands.hasMigratableEvidence)
+        #expect(commands.components.first { $0.component.id == "advanced-command-family" }?.detection == .alreadyRetired)
+        #expect(!commands.recommendedSelected)
+    }
+
+    @Test
+    func importedModuleIsReenabledAfterPartialSelectionLossWithoutRepeatingMigration() throws {
+        let (manifest, contract) = try resources()
+        let home = URL(fileURLWithPath: "/Users/test", isDirectory: true)
+        let snapshot = LegacyUpgradeScanSnapshot(
+            existingPaths: [home.appending(path: ".local/bin/swift-smoke").path],
+            runningAppPaths: [],
+            loadedLaunchAgentLabels: [],
+            cronText: "",
+            defaultsDomains: [:],
+            shortcutNames: [],
+            importedModuleIDs: ["systems.advanced-commands"]
+        )
+        let plan = LegacyUpgradeScanner.plan(
+            manifest: manifest,
+            contract: contract,
+            enabledSwitchboardIDs: [],
+            snapshot: snapshot,
+            homeDirectory: home
+        )
+        let commands = try #require(plan.modules.first { $0.module.id == "systems.advanced-commands" })
+        #expect(commands.wasPreviouslyImported)
+        #expect(commands.recommendedSelected)
+        #expect(!commands.hasMigratableEvidence)
+        #expect(AutomaticUpgradePolicy.selectedModuleIDs(from: plan).contains("systems.advanced-commands"))
+    }
+
+    @Test
+    func sharedCanonicalModuleWithoutLegacyFilesIsRecommendedUntilEnabled() throws {
+        let (manifest, contract) = try resources()
+        let home = URL(fileURLWithPath: "/Users/test", isDirectory: true)
+        let snapshot = LegacyUpgradeScanSnapshot(
+            existingPaths: [],
+            runningAppPaths: [],
+            loadedLaunchAgentLabels: [],
+            cronText: "",
+            defaultsDomains: [:],
+            shortcutNames: [],
+            importedModuleIDs: []
+        )
+        let plan = LegacyUpgradeScanner.plan(
+            manifest: manifest,
+            contract: contract,
+            enabledSwitchboardIDs: [],
+            snapshot: snapshot,
+            homeDirectory: home
+        )
+        let localRead = try #require(plan.modules.first { $0.module.id == "connectors.local-read" })
+        #expect(localRead.recommendedSelected)
+        #expect(plan.shouldPresentOnUserLaunch)
+
+        let enabledPlan = LegacyUpgradeScanner.plan(
+            manifest: manifest,
+            contract: contract,
+            enabledSwitchboardIDs: ["connectors.local-read"],
+            snapshot: snapshot,
+            homeDirectory: home
+        )
+        let enabledLocalRead = try #require(enabledPlan.modules.first { $0.module.id == "connectors.local-read" })
+        #expect(!enabledLocalRead.recommendedSelected)
     }
 
     @Test

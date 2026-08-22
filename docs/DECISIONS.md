@@ -16,7 +16,7 @@ A normal launch opens setup/review and the control center. Login-item and explic
 
 ## 3. Legacy state wins once, through a per-component contract
 
-The upgrade scanner reviews exact components and each contract declares `migrate`, `retain`, or `alreadyRetired`. Existing legacy settings/state are authoritative for the one import. One confirmation starts the selected work. Import behavior is module-owned because settings formats and semantics differ.
+The upgrade scanner reviews exact components and each contract declares `migrate`, `retain`, or `alreadyRetired`. Existing legacy settings/state are authoritative for the one import. Safe work starts automatically when its exact permissions are ready, while permission blockers stay visible and retryable. Import behavior is module-owned because settings formats and semantics differ.
 
 **Reason:** an explicit contract prevents accidental takeover and makes a partial upgrade explainable.
 
@@ -46,7 +46,7 @@ The updater verifies the GitHub manifest, expected version, Developer ID Team `Q
 
 ## 8. Public release is a gated claim
 
-The current verification record is **147 tests in 22 suites**. The Developer ID certificate is available. Publication requires the release checks, privacy/secret checks, Gatekeeper evidence, and explicit authorization; source files alone never prove that a release occurred.
+The current verification record is **158 tests in 26 suites**. The Developer ID certificate is available. Publication requires the release checks, privacy/secret checks, Gatekeeper evidence, and explicit authorization; source files alone never prove that a release occurred.
 
 **Reason:** contributors and users must be able to distinguish implemented release machinery from an artifact that has actually been published.
 

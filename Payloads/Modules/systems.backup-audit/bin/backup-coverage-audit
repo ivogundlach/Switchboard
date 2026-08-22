@@ -7,9 +7,12 @@ set -uo pipefail
 NAME="backup-coverage-audit"
 VERSION="2.1.0"
 HOME_DIR="${HOME:-$(cd && pwd -P)}"
-EXPECTED_OWNER="${BACKUP_EXPECTED_OWNER:-example-owner}"
+SCRIPT_PATH="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$0")"
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd -P)"
+EXPECTED_OWNER="${BACKUP_EXPECTED_OWNER:-}"
 PROJECTS="${BACKUP_PROJECTS:-${HOME_DIR}/Projects}"
-SYNC="${BACKUP_SYNC:-${HOME_DIR}/.local/bin/personal-repo-sync}"
+SYNC="${BACKUP_SYNC:-$SCRIPT_DIR/../../systems.repository-release/bin/personal-repo-sync}"
+APP_REPO_LIB="${BACKUP_APP_REPO_LIB:-$SCRIPT_DIR/../../systems.repository-release/bin/app-repo-lib.sh}"
 SYNC_STATUS="${BACKUP_SYNC_STATUS:-${HOME_DIR}/.local/state/personal-repo-sync/status.tsv}"
 STATE="${BACKUP_STATE:-${HOME_DIR}/.local/state/backup-coverage-audit}"
 CONTROL_DIR="${BACKUP_CONTROL_DIR:-${HOME_DIR}/Projects/source-archive}"
@@ -20,7 +23,7 @@ MAX_VERIFIED_AGE=$((48 * 60 * 60))
 TEST_PROJECTS=""
 
 usage() {
-  echo "Usage: $NAME [--status|--version|--help]"
+  echo "Usage: $NAME [--status|--ensure-status|--version|--help]"
   echo "       $NAME --test-projects PATH"
   echo "       $NAME --test-status PATH"
   echo "Normal runs are read-only and verify the configured source sync plus every folder in the projects root."
@@ -49,6 +52,11 @@ check_health_status() {
   return 0
 }
 
+if [ "${1:-}" = "--ensure-status" ]; then
+  if check_health_status "$STATUS"; then exit 0; fi
+  set --
+fi
+
 if [ "${1:-}" = "--version" ] || [ "${1:-}" = "-V" ]; then
   echo "$NAME $VERSION"
   exit 0
@@ -67,6 +75,17 @@ elif [ $# -ne 0 ]; then
   exit 2
 fi
 
+if [ -z "$EXPECTED_OWNER" ] && [ -z "$TEST_PROJECTS" ]; then
+  if command -v gh >/dev/null 2>&1; then
+    EXPECTED_OWNER="$(gh api user --jq .login 2>/dev/null || true)"
+  fi
+  if [ -z "$EXPECTED_OWNER" ]; then
+    echo "$NAME: repository owner is not configured and could not be read from GitHub CLI" >&2
+    echo "Set BACKUP_EXPECTED_OWNER to the GitHub account that owns these backups." >&2
+    exit 1
+  fi
+fi
+
 mkdir -p "$STATE"
 chmod 700 "$STATE"
 if ! mkdir "$LOCK" 2>/dev/null; then
@@ -77,12 +96,30 @@ trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT INT TERM
 
 gaps=()
 notes=()
+scheduled_projects=""
+if [ -z "$TEST_PROJECTS" ] && [ -f "$APP_REPO_LIB" ]; then
+  scheduled_projects="$(/bin/bash -c '. "$1"; printf "%s\n" "${APPS[@]}"' _ "$APP_REPO_LIB" 2>/dev/null || true)"
+fi
+is_scheduled_project() {
+  case $'\n'"$scheduled_projects"$'\n' in
+    *$'\n'"$1"$'\n'*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 for dir in "$PROJECTS"/*; do
   [ -d "$dir" ] || continue
   name="$(basename "$dir")"
   case "$name" in
     "$CONTROL_NAME")
       [ -n "$TEST_PROJECTS" ] || notes+=("$name — verified by the isolated source synchronizer, not this dirty control checkout")
+      continue
+      ;;
+    AudioDisconnectGuard)
+      [ -n "$TEST_PROJECTS" ] || notes+=("$name — superseded by the verified Switchboard audio-guard module")
+      continue
+      ;;
+    Personal-Repo)
+      [ -n "$TEST_PROJECTS" ] || notes+=("$name — superseded by the isolated personal-repo-sync source archive")
       continue
       ;;
     claude-video)
@@ -111,7 +148,13 @@ for dir in "$PROJECTS"/*; do
   unpushed="$(git -C "$dir" rev-list --count '@{u}..HEAD' 2>/dev/null || echo 0)"
   uncommitted="$(git -C "$dir" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
   [ "$unpushed" = "0" ] || gaps+=("$name — $unpushed commit(s) exist only on this Mac")
-  [ "$uncommitted" = "0" ] || notes+=("$name — $uncommitted uncommitted file(s), handled by its next automatic sync")
+  if [ "$uncommitted" != "0" ]; then
+    if [ -n "$TEST_PROJECTS" ] || is_scheduled_project "$name"; then
+      notes+=("$name — $uncommitted uncommitted file(s), handled by its next automatic sync")
+    else
+      gaps+=("$name — $uncommitted file(s) are not registered for automatic backup")
+    fi
+  fi
 done
 
 sync_detail="test fixture; source sync not invoked"

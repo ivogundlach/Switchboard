@@ -5,6 +5,13 @@ import Testing
 
 struct UpdateInstallerTests {
     @Test
+    func updaterAcceptsOnlyItsActualDirectParent() {
+        #expect(UpdateParentPolicy.isDirectParent(requestedPID: 120, actualParentPID: 120))
+        #expect(!UpdateParentPolicy.isDirectParent(requestedPID: 120, actualParentPID: 121))
+        #expect(!UpdateParentPolicy.isDirectParent(requestedPID: 1, actualParentPID: 1))
+    }
+
+    @Test
     func installedBundleInfoReadsFreshPlistAfterReplacement() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(
             "switchboard-bundle-info-\(UUID().uuidString)",

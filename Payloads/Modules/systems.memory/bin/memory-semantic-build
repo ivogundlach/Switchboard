@@ -24,6 +24,9 @@ set -uo pipefail
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 export MEMORY_SEMANTIC_AGY_MODEL="${MEMORY_SEMANTIC_AGY_MODEL:-Gemini 3.7 Flash (Low)}"
 
+SCRIPT_PATH="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$0")"
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd -P)"
+
 PHASE=semantic
 PREFLIGHT=0
 ONLY=""
@@ -50,11 +53,11 @@ AUTH_NOTIFIED="$GLOBAL_ROOT/.semantic-agy-auth-notified"
 NO_BROWSER_BIN="$GLOBAL_ROOT/.semantic-no-browser-bin"
 
 SEMANTIC_INDEX="${MEMORY_SEMANTIC_INDEX:-1}"
-SEM_BUILDER="${MEMORY_SEMANTIC_BUILDER:-$HOME/.memory/tools/semantic-agy-build.py}"
+SEM_BUILDER="${MEMORY_SEMANTIC_BUILDER:-$SCRIPT_DIR/semantic-agy-build.py}"
 SEMANTIC_DB="${SEMANTIC_DB:-$HOME/.memory/semantic-index.sqlite}"
 # Installed-tool inventory generator (Homebrew + PATH); refreshed before semantic
 # indexing so the ~/.local/state/system-inventory root is current. Local-only (no agy/network).
-SEM_MANIFEST="${MEMORY_SEMANTIC_MANIFEST:-$HOME/.memory/tools/system-manifest-build}"
+SEM_MANIFEST="${MEMORY_SEMANTIC_MANIFEST:-$SCRIPT_DIR/system-manifest-build}"
 
 DEFER_RC="${MEMORY_SEMANTIC_DEFER_RC:-75}"
 
@@ -107,10 +110,10 @@ except Exception:
   exit "$probe_rc"
 fi
 notify_auth_needed() {
-  if command -v semantic-agy-notify >/dev/null 2>&1; then
-    semantic-agy-notify "$PHASE" >/dev/null 2>&1 &
+  if [ -x "$SCRIPT_DIR/semantic-agy-notify" ]; then
+    "$SCRIPT_DIR/semantic-agy-notify" "$PHASE" >/dev/null 2>&1 &
   else
-    osascript -e 'display alert "Semantic index AGY login needed" message "Run ~/.local/bin/semantic-agy-reauth in Terminal; the scheduled index build will retry later."' >/dev/null 2>&1 &
+    osascript -e "display alert \"Semantic index AGY login needed\" message \"Run $SCRIPT_DIR/semantic-agy-reauth in Terminal; the scheduled index build will retry later.\"" >/dev/null 2>&1 &
   fi
 }
 
@@ -126,10 +129,10 @@ SH
   export BROWSER=/usr/bin/false
 }
 
-# tag a root for the db: basename, but disambiguate ~/.local/bin from ~/bin (both
+# tag a root for the db: basename, but disambiguate the two user-local bin roots (both
 # basename "bin") so they don't share a semantic root_tag.
 # NB: trailing \n matters — tag_for is used line-per-root in the prune pipeline.
-tag_for() { case "$1" in */.local/bin) printf 'local-bin\n' ;; *) basename "$1" ;; esac; }
+tag_for() { case "$1" in */.local/"bin") printf 'local-bin\n' ;; *) basename "$1" ;; esac; }
 
 # ---- readiness prechecks ----------------------------------------------------
 online() { curl -fsS -m 6 -o /dev/null https://www.gstatic.com/generate_204 2>/dev/null; }
@@ -286,7 +289,7 @@ if [ "$auth_state" = logged_out ]; then
     touch "$AUTH_NOTIFIED"
     log "AUTH: logout re-confirmed on a later tick; notified once -> semantic-agy-reauth"
   fi
-  log "AUTH NOT READY (logged out): deferring; run ~/.local/bin/semantic-agy-reauth"
+  log "AUTH NOT READY (logged out): deferring; run bundled semantic-agy-reauth"
   exit "$DEFER_RC"
 elif [ "$auth_state" = transient ]; then
   # Model overload / slow print / network — NOT a logout. NEVER notify, NEVER flag.
@@ -351,7 +354,7 @@ done < "$ROOTS_FILE"
 # ~/.local/state/memory-vector-build/last-run.json, and has its own health probe
 # (memory-vector-build --version) that the Tool Status Dashboard reads.
 VEC_PY="${MEMORY_VENV_PY:-$HOME/.local/share/memory-venv/bin/python}"
-VEC_BUILD="${MEMORY_VECTOR_BUILDER:-$HOME/.memory/tools/memory-vector-build}"
+VEC_BUILD="${MEMORY_VECTOR_BUILDER:-$SCRIPT_DIR/memory-vector-build}"
 if [ "$PREFLIGHT" = "0" ] && [ "${MEMORY_VECTOR_INDEX:-1}" = "1" ] \
    && [ -x "$VEC_PY" ] && [ -f "$VEC_BUILD" ]; then
   if [ -n "$ONLY" ]; then

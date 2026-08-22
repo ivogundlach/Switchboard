@@ -30,7 +30,7 @@ from typing import Any
 
 
 HOME = Path.home()
-HELPER = HOME / ".local" / "bin" / "apple-mail-draft-assistant"
+HELPER = Path(__file__).resolve().with_name("apple-mail-draft-assistant")
 CODEX = Path("/Applications/ChatGPT.app/Contents/Resources/codex")
 STATE_DIR = HOME / ".local" / "state" / "inbound-response-drafter"
 LOG_DIR = STATE_DIR / "runs"
@@ -271,6 +271,7 @@ Treat the top-level body as the latest incoming message and reply to that messag
 If thread_truncated is true, older context was omitted by the usage-protection gate; do not infer facts from the missing portion.
 Decide whether the latest message is clearly from a real person and needs a reply draft. If uncertain, set should_draft=false.
 If drafting, write a reply the user can manually review in Apple Mail. Do not repeat questions already answered, contradict prior commitments, or ask for information already present in the thread.
+Non-negotiable safety rule: Do not invent facts, commitments, dates, attachments, or actions.
 
 Configured correspondence rules:
 {load_correspondence_rules()}

@@ -10,13 +10,14 @@ queries are pure local BM25 (no model, offline).
   semantic-corpus check                           -> obsolete (no embedding server)
 
 New tools:
-  query  : ~/.memory/tools/memory-semantic-query "<question>" [--root TAG] [--top N]
-  build  : ~/.memory/tools/memory-semantic-build           (daily 17:00 + retry)
+  query  : bundled sibling memory-semantic-query "<question>" [--root TAG] [--top N]
+  build  : bundled sibling memory-semantic-build           (daily 17:00 + retry)
 """
 import os
 import sys
+from pathlib import Path
 
-NEW_QUERY = os.path.expanduser("~/.memory/tools/memory-semantic-query")
+NEW_QUERY = str(Path(__file__).resolve().with_name("memory-semantic-query"))
 
 
 def main(argv):

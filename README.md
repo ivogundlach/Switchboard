@@ -7,7 +7,7 @@ Switchboard is a menu-bar control center for 17 small Mac utilities. It keeps mo
 - Target: macOS 26 on Apple silicon.
 - Runtime: one Switchboard background agent runs enabled scheduled jobs and workers.
 - Catalog: 17 ready Switchboard modules; no planned or pilot entries.
-- Verification: the current suite is **147 tests in 22 suites**.
+- Verification: the current suite is **158 tests in 26 suites**.
 - Distribution: the Developer ID Application certificate for Team `Q2X7X86GYR` is available. The implemented updater verifies a GitHub manifest, expected team, and SHA-256 before installation. A release is public only when its notarized DMG and manifest are visible together on GitHub Releases.
 
 ## Product boundaries
@@ -32,13 +32,13 @@ These products stay outside Switchboard:
 
 1. A normal user launch opens the control center and presents setup/review when first-run work or legacy evidence exists.
 2. A login-item or background launch stays hidden; it starts the agent and enabled modules without opening a window.
-3. The review scans exact legacy components. Existing legacy state and settings win once, then the selected module records the import.
-4. One user confirmation starts the selected migration. The review lists every detected component and its `migrate`, `retain`, or `alreadyRetired` disposition.
-5. Permission onboarding proceeds component by component. Only the exact subject that performs the protected action is shown, and an administrator prompt appears only when the requested operation actually needs privilege.
+3. Switchboard scans every exact legacy component, imports its existing enabled state and settings, and records all 46 component dispositions in a private migration ledger.
+4. Migration starts automatically when required permissions are ready. A module retires its standalone owner only after the replacement passes that module's real operational health check; a failure remains retryable on the next launch.
+5. When macOS requires user approval, onboarding moves the exact blocked permission or module into view. Only the process that performs the protected action is shown, and an administrator prompt appears only when the requested operation actually needs privilege.
 
 ## Migration and recovery model
 
-Migration is serialized and journaled. One confirmation authorizes the selected review, while each module commits independently so one failed replacement cannot retire another module's old app. Command and Service activation is reversible. Legacy scheduler migration snapshots exact LaunchAgents or cron entries, quiesces them, verifies the replacement, and can restore the snapshot after an interrupted or failed transaction. Unresolved jobs remain active and visible as retained items; they are not hidden or silently removed.
+Migration is serialized and journaled. Every module commits independently, so one failed replacement cannot retire another module's old app. Command and Service activation is reversible. Legacy scheduler migration snapshots exact LaunchAgents or cron entries, quiesces them, verifies the replacement, and can restore the snapshot after an interrupted or failed transaction. Unresolved jobs remain active and visible as retained items; they are not hidden or silently removed.
 
 An old app is retired only when all of these checks pass: exact canonical path, expected identity and executable, trusted signature, verified recovery archive, and replacement capability health. Only then is the app moved to the operating system Trash. The verified archive remains the recovery source.
 

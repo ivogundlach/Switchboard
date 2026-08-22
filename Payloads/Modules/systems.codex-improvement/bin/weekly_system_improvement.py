@@ -40,6 +40,9 @@ IN_PROGRESS_STALE_SECONDS = 2 * 3600
 REPORT_SIZE_WARN = 100 * 1024 * 1024
 
 HOME = Path.home()
+SCRIPT_DIR = Path(__file__).resolve().parent
+RESOURCES_DIR = Path(os.environ.get("SWITCHBOARD_RESOURCES_DIR", SCRIPT_DIR.parents[2]))
+MODULES_DIR = RESOURCES_DIR / "Modules"
 MEMORY_ROOT = Path(os.environ.get("MEMORY_ROOT", HOME / ".memory"))
 STATE_ROOT = Path(os.environ.get("WSI_STATE", HOME / ".local/state/weekly-system-improvement"))
 AUDIT_ROOT = MEMORY_ROOT / "audits/weekly-system-improvement"
@@ -426,7 +429,7 @@ def run_command(name: str, command: list[str], timeout: int,
     try:
         result = subprocess.run(
             command, capture_output=True, text=True, timeout=timeout,
-            env=env or {"HOME": str(HOME), "PATH": f"{HOME}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin", "LANG": "en_US.UTF-8"},
+            env=env or {"HOME": str(HOME), "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin", "LANG": "en_US.UTF-8"},
             cwd="/tmp", check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -467,12 +470,12 @@ def collect_evidence() -> tuple[list[dict], dict]:
     collect_incidents(records, rejected)
 
     commands = [
-        run_command("transcript-distill", [str(HOME / ".local/bin/memory-transcript-distill"), "--status"], 15),
-        run_command("memory-lint", [str(MEMORY_ROOT / "tools/memory-lint")], 60,
+        run_command("transcript-distill", [str(MODULES_DIR / "systems.memory/bin/memory-transcript-distill"), "--status"], 15),
+        run_command("memory-lint", [str(MODULES_DIR / "systems.memory/bin/memory-lint")], 60,
                     nonzero_is_evidence=True, env={"HOME": str(HOME), "MEMORY_ROOT": str(MEMORY_ROOT), "PATH": "/usr/bin:/bin", "LANG": "en_US.UTF-8"}),
-        run_command("skill-drift", [str(HOME / ".local/bin/skill-drift-check"), "--check", "--json"], 900),
+        run_command("skill-drift", [str(SCRIPT_DIR / "skill-drift-check"), "--check", "--json"], 900),
         run_command("scriptify", ["/usr/bin/python3", str(HOME / ".codex/skills/tool skills/scriptify/scripts/mine-logs.py"), "--days", "14", "--top", "15"], 900),
-        run_command("codex-sync", [str(HOME / ".local/bin/codex-sync-verify")], 120, nonzero_is_evidence=True),
+        run_command("codex-sync", [str(SCRIPT_DIR / "codex-sync-verify")], 120, nonzero_is_evidence=True),
     ]
     for result in commands:
         command_evidence(result, records, rejected)

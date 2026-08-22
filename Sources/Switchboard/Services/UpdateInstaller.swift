@@ -11,6 +11,12 @@ public enum UpdateInstallerConstants {
     public static let expectedExecutableName = "Switchboard"
 }
 
+public enum UpdateParentPolicy {
+    public static func isDirectParent(requestedPID: Int32, actualParentPID: Int32) -> Bool {
+        requestedPID > 1 && requestedPID == actualParentPID
+    }
+}
+
 public enum UpdateInstallerError: Error, LocalizedError, Equatable, Sendable {
     case missingTrustedTeamIdentifier
     case invalidTrustedTeamIdentifier

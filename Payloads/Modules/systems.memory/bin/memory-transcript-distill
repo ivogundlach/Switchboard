@@ -12,9 +12,12 @@
 set -uo pipefail
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 
+SCRIPT_PATH="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$0")"
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd -P)"
+
 STATE="$HOME/.local/state/transcript-distill"
 LOG_DIR="$STATE/logs"
-TOOL="$HOME/.memory/tools/transcript_distill.py"
+TOOL="$SCRIPT_DIR/transcript_distill.py"
 DEFER_RC=75
 
 mkdir -p "$STATE" "$LOG_DIR"

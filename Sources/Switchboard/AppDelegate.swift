@@ -21,6 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         Task {
             await store.resumePersistedModules()
+            await store.performAutomaticUpgradeIfReady()
             try? WarmCornersLiveMigration.writeCurrentRuntimeHealth(warmRunning: store.warmCornersRuntimeReady)
             if let migrationID = SwitchboardLaunchContext.warmMigrationID {
                 do {

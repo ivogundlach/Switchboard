@@ -233,6 +233,7 @@ final class SwitchboardAgent {
             "HOME": fileManager.homeDirectoryForCurrentUser.path,
             "PATH": "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin",
             "SWITCHBOARD_MODULE_ID": job.moduleID,
+            "SWITCHBOARD_RESOURCES_DIR": bundleURL.appending(path: "Contents/Resources").path,
             "SMART_WAKE_HOME": fileManager.homeDirectoryForCurrentUser
                 .appending(path: ".config/smart-wake", directoryHint: .isDirectory).path,
             "SMART_WAKE_CODE_DIR": executable.deletingLastPathComponent().path,

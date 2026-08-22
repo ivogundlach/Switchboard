@@ -13,6 +13,26 @@
 
 set -u
 
+case "${1:-}" in
+	--help|-h)
+		printf '%s\n' 'Usage: auto-install-dmg-worker [--self-test|--version]'
+		exit 0
+		;;
+	--version|-V)
+		printf '%s\n' 'auto-install-dmg-worker 1.0.0'
+		exit 0
+		;;
+	--self-test)
+		for tool in /usr/bin/hdiutil /usr/bin/ditto /usr/bin/osascript /usr/bin/find /usr/bin/awk; do
+			[ -x "$tool" ] || { printf 'missing required tool: %s\n' "$tool" >&2; exit 1; }
+		done
+		printf '%s\n' 'auto-install-dmg-worker self-test: PASS'
+		exit 0
+		;;
+	'') ;;
+	*) printf 'unsupported argument: %s\n' "$1" >&2; exit 2 ;;
+esac
+
 SUPPORT_DIR="${AIDMG_SUPPORT_DIR:-$HOME/Library/Application Support/AutoInstall DMG}"
 DEST_DIR="${AIDMG_DEST_DIR:-/Applications}"
 SPOOL="$SUPPORT_DIR/queue"

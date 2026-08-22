@@ -20,11 +20,11 @@ export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 NAME="personal-repo-sync"
 VERSION="1.3.0"
 HOME_DIR="${HOME:-$(cd && pwd -P)}"
-REMOTE="${PERSONAL_REPO_REMOTE:-https://github.com/example-owner/private-source-archive.git}"
-EXPECTED_REMOTE="${PERSONAL_REPO_EXPECTED_REMOTE:-$REMOTE}"
-REPO_SLUG="${PERSONAL_REPO_SLUG:-example-owner/private-source-archive}"
+REMOTE="${PERSONAL_REPO_REMOTE:-}"
+EXPECTED_REMOTE="${PERSONAL_REPO_EXPECTED_REMOTE:-}"
+REPO_SLUG="${PERSONAL_REPO_SLUG:-}"
 BRANCH="main"
-CONTROL="${PERSONAL_REPO_CONTROL:-${HOME_DIR}/Projects/source-archive}"
+CONTROL="${PERSONAL_REPO_CONTROL:-}"
 PRODUCTION_STATE="${PERSONAL_REPO_PRODUCTION_STATE:-$HOME/.local/state/personal-repo-sync}"
 MODE="production"
 ACTION="run"
@@ -47,7 +47,7 @@ REVIEWED_GITLEAKS_ENTRIES=(
   "automation/memory-tests/test_redaction.py:discord-client-id:38"
 )
 FIXTURE_BASELINE_PATH="automation/memory-tests/test_redaction.py"
-FIXTURE_BASELINE_SHA256="${PERSONAL_REPO_FIXTURE_BASELINE_SHA256:-}"
+FIXTURE_BASELINE_SHA256="${PERSONAL_REPO_FIXTURE_BASELINE_SHA256:-e3f9974d43b6593a8394f18b2a62da5b6eb3dc44a046eb172980f5eab97ba858}"
 
 for arg in "$@"; do
   case "$arg" in
@@ -151,6 +151,52 @@ case "$ACTION" in
   help) usage; exit 0 ;;
   invalid) usage >&2; exit 2 ;;
 esac
+
+production_file_value() {
+  local file="$1" key="$2"
+  [ -f "$file" ] && [ ! -L "$file" ] || return 0
+  awk -F '\t' -v key="$key" '$1 == key { value=$2 } END { print value }' "$file"
+}
+
+if [ -z "$CONTROL" ]; then
+  if [ -d "${HOME_DIR}/Projects/source-archive" ]; then
+    CONTROL="${HOME_DIR}/Projects/source-archive"
+  elif [ -d "${HOME_DIR}/Projects/Personal-Repo" ]; then
+    CONTROL="${HOME_DIR}/Projects/Personal-Repo"
+  else
+    CONTROL="${HOME_DIR}/Projects/source-archive"
+  fi
+fi
+
+if [ -z "$REMOTE" ]; then
+  REMOTE="$(production_file_value "$BASELINE_POINTER" remote)"
+fi
+
+SIGNED_IN_OWNER="${PERSONAL_REPO_OWNER:-$(gh api user --jq .login 2>/dev/null || true)}"
+if [ -z "$SIGNED_IN_OWNER" ] && [ "${PERSONAL_REPO_TEST_MODE:-0}" != "1" ]; then
+  echo "personal-repo-sync: GitHub owner is unavailable; sign in with gh or set PERSONAL_REPO_OWNER." >&2
+  exit 1
+fi
+
+if [ -z "$REMOTE" ]; then
+  REMOTE="https://github.com/${SIGNED_IN_OWNER}/private-source-archive.git"
+fi
+if [[ ! "$REMOTE" =~ ^https://github\.com/([^/]+)/([^/]+)\.git$ ]]; then
+  echo "personal-repo-sync: repository must be an exact GitHub HTTPS .git URL." >&2
+  exit 1
+fi
+REMOTE_OWNER="${BASH_REMATCH[1]}"
+REMOTE_NAME="${BASH_REMATCH[2]}"
+if [ "${PERSONAL_REPO_TEST_MODE:-0}" != "1" ] && [ "$REMOTE_OWNER" != "$SIGNED_IN_OWNER" ]; then
+  echo "personal-repo-sync: repository owner does not match the signed-in GitHub account." >&2
+  exit 1
+fi
+REPO_SLUG="${REPO_SLUG:-${REMOTE_OWNER}/${REMOTE_NAME}}"
+if [ "$REPO_SLUG" != "${REMOTE_OWNER}/${REMOTE_NAME}" ]; then
+  echo "personal-repo-sync: repository slug does not match the selected remote." >&2
+  exit 1
+fi
+EXPECTED_REMOTE="${EXPECTED_REMOTE:-$REMOTE}"
 
 release_lock() {
   if [ "$LOCK_HELD" -eq 1 ] && [ -d "$LOCK" ]; then

@@ -9,8 +9,25 @@
 HOME_DIR="${HOME:-$(cd && pwd -P)}"
 PROJECTS="${APP_REPO_PROJECTS:-${HOME_DIR}/Projects}"
 STATE="${APP_REPO_STATE:-$HOME/.local/state/app-repo-sync}"
-GH_OWNER="${APP_REPO_OWNER:-example-owner}"
-ARCHIVE_REMOTE="${APP_REPO_ARCHIVE_REMOTE:-https://github.com/example-owner/private-source-archive.git}"
+GH_OWNER="${APP_REPO_OWNER:-}"
+ARCHIVE_REMOTE="${APP_REPO_ARCHIVE_REMOTE:-}"
+
+ensure_repo_identity() {
+  local baseline_remote=""
+  if [ -z "$GH_OWNER" ] && command -v gh >/dev/null 2>&1; then
+    GH_OWNER="$(gh api user --jq .login 2>/dev/null || true)"
+  fi
+  [ -n "$GH_OWNER" ] || { echo "GitHub owner is unavailable; set APP_REPO_OWNER." >&2; return 1; }
+  if [ -z "$ARCHIVE_REMOTE" ] && [ -f "$HOME/.local/state/personal-repo-sync/baseline.tsv" ] &&
+     [ ! -L "$HOME/.local/state/personal-repo-sync/baseline.tsv" ]; then
+    baseline_remote="$(awk -F '\t' '$1 == "remote" { value=$2 } END { print value }' \
+      "$HOME/.local/state/personal-repo-sync/baseline.tsv")"
+    if [[ "$baseline_remote" =~ ^https://github\.com/${GH_OWNER}/[^/]+\.git$ ]]; then
+      ARCHIVE_REMOTE="$baseline_remote"
+    fi
+  fi
+  ARCHIVE_REMOTE="${ARCHIVE_REMOTE:-https://github.com/${GH_OWNER}/private-source-archive.git}"
+}
 
 # Every configured app with local work is backed up to a private repository.
 #
@@ -41,8 +58,9 @@ ARCHIVE_REMOTE="${APP_REPO_ARCHIVE_REMOTE:-https://github.com/example-owner/priv
 APPS=(
   AmethystFork AutoInstallDMG CanIAffordThis CLI-Anything CopyPathFinder
   ElectionSimulator ForceCopyPaste Kinetics knockoff MacroSimulator Market
-  NewTabLinks NutrientTracker ReleaseRadar School SchoolDashboard ToolStatusDashboard
-  UsageQueue Vitals WarmCorners YouTubeFirstContentTab YouTubeHomeReload
+  NewTabLinks NutrientTracker ReleaseRadar School SchoolDashboard Switchboard
+  ToolStatusDashboard UsageQueue Vitals WarmCorners YouTubeFirstContentTab
+  YouTubeHomeReload mac-apps t3code
 )
 
 # Commit grouping. Each app-relative path is matched top to bottom; the first

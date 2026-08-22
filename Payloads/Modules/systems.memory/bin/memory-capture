@@ -2,6 +2,8 @@
 set -euo pipefail
 
 ROOT="${MEMORY_ROOT:-$HOME/.memory}"
+SCRIPT_PATH="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$0")"
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd -P)"
 topic="chat"
 kind="note"
 claim=""
@@ -128,7 +130,7 @@ jq -cn \
 # fact it cannot retrieve, which is indistinguishable from not having captured it.
 # Detached and best-effort by design: it must never delay or fail a capture, and
 # --only steps aside silently if a full build already holds the lock.
-if [ "${MEMORY_CAPTURE_INDEX:-1}" = "1" ] && [ -x "$ROOT/tools/memory-semantic-build" ]; then
+if [ "${MEMORY_CAPTURE_INDEX:-1}" = "1" ] && [ -x "$SCRIPT_DIR/memory-semantic-build" ]; then
   # Every capture appends here, and nothing else ever reads it, so it grows
   # without bound unless truncated. An unattended system's log files are exactly
   # where a slow disk-filler hides.
@@ -136,7 +138,7 @@ if [ "${MEMORY_CAPTURE_INDEX:-1}" = "1" ] && [ -x "$ROOT/tools/memory-semantic-b
   mkdir -p "$ROOT/logs"
   [ -f "$_cl" ] && [ "$(stat -f%z "$_cl" 2>/dev/null || echo 0)" -gt 2000000 ] && : > "$_cl"
   # nohup + subshell, not setsid: setsid does not exist on macOS.
-  ( nohup "$ROOT/tools/memory-semantic-build" --only "$ROOT/$rel_raw" \
+  ( nohup "$SCRIPT_DIR/memory-semantic-build" --only "$ROOT/$rel_raw" \
       >>"$_cl" 2>&1 & ) >/dev/null 2>&1 || true
 fi
 

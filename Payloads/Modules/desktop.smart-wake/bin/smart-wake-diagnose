@@ -3,19 +3,29 @@ set -u
 
 NAME="smart-wake-diagnose"
 VERSION="1.0.0"
+CODE_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 if [ "${SMART_WAKE_DIAG_TEST_MODE:-0}" = "1" ]; then
     SMART_WAKE_HOME="${SMART_WAKE_DIAG_HOME:?SMART_WAKE_DIAG_HOME is required in test mode}"
-    SOURCE_HOME="${SMART_WAKE_DIAG_SOURCE_HOME:?SMART_WAKE_DIAG_SOURCE_HOME is required in test mode}"
+    CODE_DIR="${SMART_WAKE_DIAG_SOURCE_HOME:?SMART_WAKE_DIAG_SOURCE_HOME is required in test mode}"
     HELPER="${SMART_WAKE_DIAG_HELPER:?SMART_WAKE_DIAG_HELPER is required in test mode}"
     LABEL="${SMART_WAKE_DIAG_LABEL:-com.user.smartwake.sleep-guard}"
 else
     HOME_DIR="${HOME:-$(cd && pwd -P)}"
     SMART_WAKE_HOME="${SMART_WAKE_DIAG_HOME:-${HOME_DIR}/.config/smart-wake}"
-    SOURCE_HOME="${SMART_WAKE_DIAG_SOURCE_HOME:-${HOME_DIR}/Projects/smart-wake}"
     HELPER="/Library/PrivilegedHelperTools/com.user.smartwake.sleep-guard"
     LABEL="com.user.smartwake.sleep-guard"
 fi
 STATUS_FILE="${SMART_WAKE_HOME}/state/status.env"
+
+REQUIRED_RUNTIME_FILES=(
+    configure-display-lock.sh
+    install-sleep-guard.sh
+    lib.sh
+    sleep-guard-root.sh
+    smart-wake
+    smart-wake.sh
+    wifi-ssid.py
+)
 
 usage() {
     cat <<'EOF'
@@ -55,6 +65,12 @@ section() {
 printf 'Smart Wake diagnostic report: %s\n' "$(/bin/date '+%Y-%m-%d %H:%M:%S %z')"
 
 section "protected helper"
+if [ -f "$HELPER" ]; then
+    printf 'protected helper present: %s\n' "$HELPER"
+else
+    printf 'ERROR: protected helper is missing: %s\n' "$HELPER"
+    failures=$((failures + 1))
+fi
 if helper_state=$(/bin/launchctl print "system/${LABEL}" 2>&1); then
     printf '%s\n' "$helper_state" | /usr/bin/awk '
         /^[[:space:]]*(state|pid|runs|last exit code|job state) =/ { print }
@@ -90,38 +106,16 @@ else
     failures=$((failures + 1))
 fi
 
-section "deployed/source identity"
-for relative in install-sleep-guard.sh lib.sh sleep-guard-root.sh smart-wake.sh tests/smart-wake-test.sh; do
-    source_path="${SOURCE_HOME}/${relative}"
-    live_path="${SMART_WAKE_HOME}/${relative}"
-    if [ ! -f "$source_path" ] || [ ! -f "$live_path" ]; then
-        printf 'ERROR: missing %s\n' "$relative"
-        failures=$((failures + 1))
-        continue
-    fi
-    source_hash=$(/usr/bin/shasum -a 256 "$source_path" | /usr/bin/awk '{print $1}')
-    live_hash=$(/usr/bin/shasum -a 256 "$live_path" | /usr/bin/awk '{print $1}')
-    if [ "$source_hash" = "$live_hash" ]; then
-        printf 'match %s\n' "$relative"
+section "bundled runtime"
+for relative in "${REQUIRED_RUNTIME_FILES[@]}"; do
+    runtime_path="${CODE_DIR}/${relative}"
+    if [ -f "$runtime_path" ]; then
+        printf 'present %s\n' "$relative"
     else
-        printf 'ERROR: deployed copy differs: %s\n' "$relative"
+        printf 'ERROR: missing bundled runtime file %s\n' "$relative"
         failures=$((failures + 1))
     fi
 done
-
-if [ -f "$HELPER" ] && [ -f "${SOURCE_HOME}/sleep-guard-root.sh" ]; then
-    helper_hash=$(/usr/bin/shasum -a 256 "$HELPER" | /usr/bin/awk '{print $1}')
-    source_helper_hash=$(/usr/bin/shasum -a 256 "${SOURCE_HOME}/sleep-guard-root.sh" | /usr/bin/awk '{print $1}')
-    if [ "$helper_hash" = "$source_helper_hash" ]; then
-        printf 'match protected helper\n'
-    else
-        printf 'ERROR: protected helper differs from source\n'
-        failures=$((failures + 1))
-    fi
-else
-    printf 'ERROR: protected helper or source is missing\n'
-    failures=$((failures + 1))
-fi
 
 section "credential-file metadata"
 if [ -n "${SMART_WAKE_CREDENTIAL_PATHS:-}" ]; then
@@ -150,11 +144,34 @@ done
 
 if [ "$run_checks" = true ]; then
     section "regression checks"
-    if /bin/bash "${SMART_WAKE_HOME}/tests/smart-wake-test.sh"; then
-        :
-    else
-        failures=$((failures + 1))
-    fi
+    for relative in "${REQUIRED_RUNTIME_FILES[@]}"; do
+        runtime_path="${CODE_DIR}/${relative}"
+        case "$relative" in
+            *.sh|smart-wake)
+                if /bin/bash -n "$runtime_path" 2>&1; then
+                    printf 'syntax ok %s\n' "$relative"
+                else
+                    printf 'ERROR: syntax check failed: %s\n' "$relative"
+                    failures=$((failures + 1))
+                fi
+                ;;
+            *.py)
+                if /usr/bin/python3 - "$runtime_path" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+compile(path.read_text(), str(path), "exec")
+PY
+                then
+                    printf 'syntax ok %s\n' "$relative"
+                else
+                    printf 'ERROR: syntax check failed: %s\n' "$relative"
+                    failures=$((failures + 1))
+                fi
+                ;;
+        esac
+    done
 fi
 
 section "result"

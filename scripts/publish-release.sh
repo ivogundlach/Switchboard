@@ -83,7 +83,7 @@ fi
 release_root="$(mktemp -d "${TMPDIR:-/tmp}/switchboard-release.XXXXXX")"
 cleanup() {
   if [[ -n "${mounted_device:-}" ]]; then
-    hdiutil detach "$mounted_device" >/dev/null 2>&1 || true
+    diskutil eject "$mounted_device" >/dev/null 2>&1 || true
   fi
   rm -rf "$release_root"
 }
@@ -131,13 +131,13 @@ xcrun stapler validate "$dmg"
 hdiutil verify "$dmg" >/dev/null
 
 attach_plist="$release_root/attach.plist"
-hdiutil attach -readonly -nobrowse -plist "$dmg" >"$attach_plist"
+diskutil image attach --readOnly --nobrowse --plist "$dmg" >"$attach_plist"
 mounted_device="$(plutil -extract system-entities xml1 -o - "$attach_plist" | plutil -convert json -o - -- - | jq -r '.[] | select(."mount-point" != null) | ."dev-entry"' | head -1)"
 mount_point="$(plutil -extract system-entities xml1 -o - "$attach_plist" | plutil -convert json -o - -- - | jq -r '.[] | select(."mount-point" != null) | ."mount-point"' | head -1)"
 [[ -n "$mounted_device" && -d "$mount_point/Switchboard.app" ]] || { printf 'Notarized DMG mount verification failed.\n' >&2; exit 7; }
 codesign --verify --deep --strict --verbose=2 "$mount_point/Switchboard.app"
 spctl --assess --type execute --verbose=4 "$mount_point/Switchboard.app"
-hdiutil detach "$mounted_device" >/dev/null
+diskutil eject "$mounted_device" >/dev/null
 mounted_device=""
 
 sha256="$(shasum -a 256 "$dmg" | awk '{print $1}')"

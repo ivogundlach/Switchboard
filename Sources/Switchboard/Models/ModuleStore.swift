@@ -845,7 +845,10 @@ final class ModuleStore {
                     kineticsHandoff = try kineticsHandoff.map {
                         try kineticsHandoffStore.transition($0, to: .replacementSelected)
                     }
-                } else if !isEnabled(review.module) {
+                } else if UpgradeActivationPolicy.action(
+                    isEnabled: isEnabled(review.module),
+                    ownershipReady: upgradeActivationOwnershipIsReady(review.module)
+                ) == .enable {
                     if let activationError = await enableModule(
                         review.module,
                         presentsError: false
@@ -856,6 +859,12 @@ final class ModuleStore {
                         throw UpgradeExecutionError.activationFailed("the replacement did not enable")
                     }
                 } else {
+                    if UpgradeActivationPolicy.action(
+                        isEnabled: true,
+                        ownershipReady: upgradeActivationOwnershipIsReady(review.module)
+                    ) == .repairOwnership {
+                        try repairUpgradeActivationOwnership(review.module)
+                    }
                     // Existing Switchboard state does not suppress a legacy handoff.
                     let labels = migratableLegacyLabels(for: review.module)
                     if !labels.isEmpty {
@@ -1138,6 +1147,87 @@ final class ModuleStore {
         }
     }
 
+    private func upgradeActivationOwnershipIsReady(_ module: ModuleDefinition) -> Bool {
+        ModuleOperationalHealthService.activationReady(
+            moduleID: module.id,
+            commandNames: commands(for: module),
+            serviceNames: services(for: module).map(\.name),
+            ownsScheduledJobs: false,
+            agentEnabled: true,
+            bundleURL: Bundle.main.bundleURL
+        ).ready
+    }
+
+    private func repairUpgradeActivationOwnership(_ module: ModuleDefinition) throws {
+        let commandNames = commands(for: module)
+        let serviceNames = services(for: module).map(\.name)
+        let commandOwnershipReady = ModuleOperationalHealthService.activationReady(
+            moduleID: module.id,
+            commandNames: commandNames,
+            serviceNames: [],
+            ownsScheduledJobs: false,
+            agentEnabled: true,
+            bundleURL: Bundle.main.bundleURL
+        ).ready
+        let serviceOwnershipReady = ModuleOperationalHealthService.activationReady(
+            moduleID: module.id,
+            commandNames: [],
+            serviceNames: serviceNames,
+            ownsScheduledJobs: false,
+            agentEnabled: true,
+            bundleURL: Bundle.main.bundleURL
+        ).ready
+
+        var commandsReactivated = false
+        var servicesReactivated = false
+        do {
+            if !commandOwnershipReady, !commandNames.isEmpty {
+                // Restore any prior activation transaction first, then build one
+                // complete fresh transaction around the exact legacy commands.
+                try commandActivation.disable(
+                    bundleURL: Bundle.main.bundleURL,
+                    moduleID: module.id,
+                    commandNames: commandNames
+                )
+                try commandActivation.enable(
+                    bundleURL: Bundle.main.bundleURL,
+                    moduleID: module.id,
+                    commandNames: commandNames
+                )
+                commandsReactivated = true
+            }
+            if !serviceOwnershipReady, !serviceNames.isEmpty {
+                try serviceActivation.disable(
+                    bundleURL: Bundle.main.bundleURL,
+                    serviceNames: serviceNames
+                )
+                try serviceActivation.enable(
+                    bundleURL: Bundle.main.bundleURL,
+                    serviceNames: serviceNames
+                )
+                servicesReactivated = true
+            }
+            if module.id == "files.copy-path", !serviceOwnershipReady {
+                try copyPath.enable(bundleURL: Bundle.main.bundleURL)
+            }
+        } catch {
+            if servicesReactivated {
+                try? serviceActivation.disable(
+                    bundleURL: Bundle.main.bundleURL,
+                    serviceNames: serviceNames
+                )
+            }
+            if commandsReactivated {
+                try? commandActivation.disable(
+                    bundleURL: Bundle.main.bundleURL,
+                    moduleID: module.id,
+                    commandNames: commandNames
+                )
+            }
+            throw error
+        }
+    }
+
     private func refreshEnabledModuleHealth() async {
         for module in manifest.modules where enabledModuleIDs.contains(module.id) {
             await refreshOperationalHealth(for: module)
@@ -1214,6 +1304,19 @@ final class ModuleStore {
                 String(decodingCString: $0, as: UTF8.self)
             }
         }
+    }
+}
+
+enum UpgradeActivationAction: Equatable {
+    case enable
+    case repairOwnership
+    case migrateSchedulersOnly
+}
+
+enum UpgradeActivationPolicy {
+    static func action(isEnabled: Bool, ownershipReady: Bool) -> UpgradeActivationAction {
+        guard isEnabled else { return .enable }
+        return ownershipReady ? .migrateSchedulersOnly : .repairOwnership
     }
 }
 

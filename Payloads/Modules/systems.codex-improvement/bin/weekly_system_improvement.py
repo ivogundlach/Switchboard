@@ -24,7 +24,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 
-VERSION = "1.1.3"
+VERSION = "1.1.4"
 SCHEMA_VERSION = 1
 MODEL = "gpt-5.6-sol"
 MODEL_EFFORT = "medium"
@@ -470,7 +470,7 @@ def collect_evidence() -> tuple[list[dict], dict]:
     collect_incidents(records, rejected)
 
     commands = [
-        run_command("transcript-distill", [str(MODULES_DIR / "systems.memory/bin/memory-transcript-distill"), "--status"], 15),
+        run_command("transcript-distill", [str(MODULES_DIR / "systems.memory/bin/memory-transcript-distill"), "--status"], 60),
         run_command("memory-lint", [str(MODULES_DIR / "systems.memory/bin/memory-lint")], 60,
                     nonzero_is_evidence=True, env={"HOME": str(HOME), "MEMORY_ROOT": str(MEMORY_ROOT), "PATH": "/usr/bin:/bin", "LANG": "en_US.UTF-8"}),
         run_command("skill-drift", [str(SCRIPT_DIR / "skill-drift-check"), "--check", "--json"], 900),

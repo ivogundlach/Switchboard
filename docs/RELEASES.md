@@ -9,6 +9,8 @@ The current release target is `v0.2.5`, with **172 tests in 29 suites**. The Dev
 The bundled weekly system-improvement worker now accepts routine signed Codex 0.x updates from the verified OpenAI Developer ID app instead of pinning one temporary binary hash, and it follows Codex's fixed owner-only `auth.json` layout for unattended isolated runs. It still fails closed for an altered signature, unexpected publisher or executable identity, downgrade below 0.147, the future 1.0 compatibility boundary, missing security-critical command options, a binary that changes during verification, expiring authentication, or authentication that changes during a run.
 Its read-only transcript status collector allows one bounded delayed retry, and its memory validation collector allows up to five minutes under macOS background I/O throttling, so agent launch does not create a false weekly-audit failure.
 
+The shared Service Management agent now uses macOS's `Standard` process class instead of the heavily throttled `Background` class. It remains hidden and keeps the same schedules, but long first-party maintenance checks receive enough CPU and disk bandwidth to complete within their published limits.
+
 ## Local verification
 
 Run from the repository root:

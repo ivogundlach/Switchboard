@@ -77,6 +77,7 @@ enum SelfTest {
         }
 
         try validateCopyPathExtension(bundleURL: Bundle.main.bundleURL)
+        try validateAgentProcessPolicy(bundleURL: Bundle.main.bundleURL)
 
         let contract = try JSONDecoder().decode(
             WarmCornersMigrationContract.self,
@@ -93,6 +94,21 @@ enum SelfTest {
               !contract.dataContract.snapshot.isEmpty,
               !contract.retirement.restoreSource.isEmpty else {
             throw SelfTestError.invalidPilotContract
+        }
+    }
+
+    private static func validateAgentProcessPolicy(bundleURL: URL) throws {
+        let plistURL = bundleURL.appending(
+            path: "Contents/Library/LaunchAgents/com.ivogundlach.switchboard.agent.plist"
+        )
+        let info = try PropertyListSerialization.propertyList(
+            from: Data(contentsOf: plistURL), options: [], format: nil
+        ) as? [String: Any]
+        guard info?["Label"] as? String == "com.ivogundlach.switchboard.agent",
+              info?["ProcessType"] as? String == "Standard",
+              info?["RunAtLoad"] as? Bool == true,
+              info?["KeepAlive"] as? Bool == true else {
+            throw SelfTestError.invalidAgentProcessPolicy
         }
     }
 
@@ -370,6 +386,7 @@ enum SelfTestError: LocalizedError {
     case missingKineticsCompanion
     case missingKineticsMigrationHelper
     case invalidKineticsMigrationHelper
+    case invalidAgentProcessPolicy
 
     var errorDescription: String? {
         switch self {
@@ -396,6 +413,7 @@ enum SelfTestError: LocalizedError {
         case .missingKineticsCompanion: "The nested Kinetics companion is missing or unsafe."
         case .missingKineticsMigrationHelper: "The inert Kinetics migration helper is missing or unsafe."
         case .invalidKineticsMigrationHelper: "The inert Kinetics migration helper identity or background settings are invalid."
+        case .invalidAgentProcessPolicy: "The Switchboard agent process policy is invalid."
         }
     }
 }

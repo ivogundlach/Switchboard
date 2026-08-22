@@ -85,6 +85,7 @@ cleanup() {
   if [[ -n "${mounted_device:-}" ]]; then
     diskutil eject "$mounted_device" >/dev/null 2>&1 || true
   fi
+  chmod -R u+w "$release_root" 2>/dev/null || true
   rm -rf "$release_root"
 }
 trap cleanup EXIT

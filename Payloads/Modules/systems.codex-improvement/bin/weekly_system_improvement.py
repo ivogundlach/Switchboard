@@ -24,7 +24,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 
-VERSION = "1.1.4"
+VERSION = "1.1.5"
 SCHEMA_VERSION = 1
 MODEL = "gpt-5.6-sol"
 MODEL_EFFORT = "medium"
@@ -425,15 +425,23 @@ def collect_incidents(records: list[dict], rejected: dict[str, int]) -> None:
 
 
 def run_command(name: str, command: list[str], timeout: int,
-                *, nonzero_is_evidence: bool = False, env: dict[str, str] | None = None) -> dict:
-    try:
-        result = subprocess.run(
-            command, capture_output=True, text=True, timeout=timeout,
-            env=env or {"HOME": str(HOME), "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin", "LANG": "en_US.UTF-8"},
-            cwd="/tmp", check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise WeeklyError("collector_failed", f"{name} failed to execute: {exc}") from exc
+                *, nonzero_is_evidence: bool = False, env: dict[str, str] | None = None,
+                timeout_retries: int = 0, retry_delay: float = 10) -> dict:
+    for attempt in range(timeout_retries + 1):
+        try:
+            result = subprocess.run(
+                command, capture_output=True, text=True, timeout=timeout,
+                env=env or {"HOME": str(HOME), "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin", "LANG": "en_US.UTF-8"},
+                cwd="/tmp", check=False,
+            )
+            break
+        except subprocess.TimeoutExpired as exc:
+            if attempt < timeout_retries:
+                time.sleep(retry_delay)
+                continue
+            raise WeeklyError("collector_failed", f"{name} failed to execute: {exc}") from exc
+        except OSError as exc:
+            raise WeeklyError("collector_failed", f"{name} failed to execute: {exc}") from exc
     output = ((result.stdout or "") + ("\n" + result.stderr if result.stderr else "")).strip()
     if len(output.encode()) > MAX_COLLECTOR_OUTPUT:
         raise WeeklyError("collector_oversize", f"{name} exceeded the output limit")
@@ -470,9 +478,11 @@ def collect_evidence() -> tuple[list[dict], dict]:
     collect_incidents(records, rejected)
 
     commands = [
-        run_command("transcript-distill", [str(MODULES_DIR / "systems.memory/bin/memory-transcript-distill"), "--status"], 60),
+        run_command("transcript-distill", [str(MODULES_DIR / "systems.memory/bin/memory-transcript-distill"), "--status"], 60,
+                    timeout_retries=1),
         run_command("memory-lint", [str(MODULES_DIR / "systems.memory/bin/memory-lint")], 60,
-                    nonzero_is_evidence=True, env={"HOME": str(HOME), "MEMORY_ROOT": str(MEMORY_ROOT), "PATH": "/usr/bin:/bin", "LANG": "en_US.UTF-8"}),
+                    nonzero_is_evidence=True, env={"HOME": str(HOME), "MEMORY_ROOT": str(MEMORY_ROOT), "PATH": "/usr/bin:/bin", "LANG": "en_US.UTF-8"},
+                    timeout_retries=1),
         run_command("skill-drift", [str(SCRIPT_DIR / "skill-drift-check"), "--check", "--json"], 900),
         run_command("scriptify", ["/usr/bin/python3", str(HOME / ".codex/skills/tool skills/scriptify/scripts/mine-logs.py"), "--days", "14", "--top", "15"], 900),
         run_command("codex-sync", [str(SCRIPT_DIR / "codex-sync-verify")], 120, nonzero_is_evidence=True),
@@ -1333,6 +1343,22 @@ def selftest() -> int:
           gatekeeper_accepts("/Applications/ChatGPT.app: accepted\nsource=Notarized Developer ID", CANONICAL_CODEX_APP)
           and not gatekeeper_accepts("/Applications/ChatGPT.app: not accepted", CANONICAL_CODEX_APP)
           and not gatekeeper_accepts("accepted", CANONICAL_CODEX_APP))
+    original_subprocess_run = subprocess.run
+    retry_calls = 0
+    def timeout_once(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        nonlocal retry_calls
+        retry_calls += 1
+        if retry_calls == 1:
+            raise subprocess.TimeoutExpired(cmd=args[0], timeout=1)
+        return subprocess.CompletedProcess(args=args[0], returncode=0, stdout="ok", stderr="")
+    subprocess.run = timeout_once
+    try:
+        retry_result = run_command("bounded-retry", ["/usr/bin/true"], 1,
+                                   timeout_retries=1, retry_delay=0)
+    finally:
+        subprocess.run = original_subprocess_run
+    check("read-only collector retries one timeout and then succeeds",
+          retry_calls == 2 and retry_result["output"] == "ok")
     with tempfile.TemporaryDirectory() as binary_dir:
         binary = Path(binary_dir) / "codex"
         binary.write_bytes(b"immutable test binary\n")

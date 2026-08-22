@@ -9,6 +9,13 @@ struct BundledCommandActivationTests {
     private let recovery = URL(fileURLWithPath: "/fixture/home/Library/Application Support/Switchboard/Activation", isDirectory: true)
 
     @Test
+    func localFilesystemTreatsARealMissingPathAsAbsent() throws {
+        let missing = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("switchboard-missing-command-\(UUID().uuidString)")
+        #expect(try LocalBundledCommandActivationFileSystem().metadata(at: missing) == nil)
+    }
+
+    @Test
     func traversalAndSourceSymlinkAreRejected() throws {
         let fileSystem = MemoryBundledCommandFileSystem()
         let service = makeService(fileSystem)

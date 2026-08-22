@@ -242,12 +242,17 @@ final class LegacyAppRetirement {
         guard verify.status == 0 else { throw LegacyAppRetirementError.untrustedSignature(verify.error) }
         let display = run("/usr/bin/codesign", ["-d", "-r-", "--verbose=4", appURL.path])
         guard display.status == 0 else { throw LegacyAppRetirementError.untrustedSignature(display.error) }
-        let requirement = display.error.lowercased()
-        let accepted = requirement.contains("anchor apple generic")
-            && requirement.contains("certificate leaf[subject.ou] = \(Self.developerTeamID.lowercased())")
-            || requirement.contains("certificate leaf = h\"\(Self.historicalLeaf)\"")
+        let requirement = (display.output + "\n" + display.error).lowercased()
+        let accepted = Self.acceptsDesignatedRequirement(requirement)
         guard accepted else { throw LegacyAppRetirementError.untrustedSignature("unmatched designated requirement") }
         return requirement
+    }
+
+    static func acceptsDesignatedRequirement(_ requirement: String) -> Bool {
+        let normalized = requirement.lowercased()
+        return normalized.contains("anchor apple generic")
+            && normalized.contains("certificate leaf[subject.ou] = \(developerTeamID.lowercased())")
+            || normalized.contains("certificate leaf = h\"\(historicalLeaf)\"")
     }
 
     private func isRegularDirectory(_ url: URL) throws -> Bool {

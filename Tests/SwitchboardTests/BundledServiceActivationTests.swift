@@ -9,6 +9,13 @@ struct BundledServiceActivationTests {
     private let recoveryRoot = URL(fileURLWithPath: "/fixture/home/Library/Application Support/Switchboard/Services", isDirectory: true)
 
     @Test
+    func localFilesystemTreatsARealMissingPathAsAbsent() throws {
+        let missing = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("switchboard-missing-service-\(UUID().uuidString)")
+        #expect(try LocalBundledServiceActivationFileSystem().metadata(at: missing) == nil)
+    }
+
+    @Test
     func traversalAndSymlinkSourcesAreRejected() throws {
         let fileSystem = MemoryBundledServiceFileSystem()
         let activation = makeActivation(fileSystem)

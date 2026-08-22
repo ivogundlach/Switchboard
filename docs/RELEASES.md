@@ -2,9 +2,9 @@
 
 ## Status
 
-The current release target is `v0.2.5`, with **158 tests in 26 suites**. The Developer ID Application certificate for Team `Q2X7X86GYR` is available. Publication is complete only when the notarized, stapled DMG and its matching update manifest are visible together on GitHub Releases.
+The current release target is `v0.2.5`, with **162 tests in 27 suites**. The Developer ID Application certificate for Team `Q2X7X86GYR` is available. Publication is complete only when the notarized, stapled DMG and its matching update manifest are visible together on GitHub Releases.
 
-`v0.2.5` automatically inventories and migrates detected standalone utilities, commands, Services, and background jobs after their exact permissions are ready. It preserves imported settings and enabled state, records all 46 component outcomes, verifies every enabled module through an explicit operational probe, and retires an old owner only after that probe passes. Onboarding moves the exact permission or module failure into view. Bundled scheduled workers now execute their bundled first-party code instead of depending on old standalone installation paths.
+`v0.2.5` automatically inventories and migrates detected standalone utilities, commands, Services, and background jobs after their exact permissions are ready. It preserves imported settings and enabled state, records all 46 component outcomes, verifies every enabled module through an explicit operational probe, and retires an old owner only after that probe passes. Onboarding moves the exact permission or module failure into view. Bundled scheduled workers now execute their bundled first-party code instead of depending on old standalone installation paths. Live migration validation also covers macOS's alternate missing-file error and historical locally signed app requirements before public release.
 
 ## Local verification
 

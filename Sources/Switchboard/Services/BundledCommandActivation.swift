@@ -449,7 +449,7 @@ struct LocalBundledCommandActivationFileSystem: BundledCommandActivationFileSyst
         let attributes: [FileAttributeKey: Any]
         do {
             attributes = try fileManager.attributesOfItem(atPath: url.path)
-        } catch CocoaError.fileNoSuchFile {
+        } catch let error as CocoaError where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile {
             return nil
         }
         let type = attributes[.type] as? FileAttributeType

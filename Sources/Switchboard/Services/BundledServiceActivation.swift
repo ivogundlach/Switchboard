@@ -390,7 +390,7 @@ struct LocalBundledServiceActivationFileSystem: BundledServiceActivationFileSyst
     func metadata(at url: URL) throws -> BundledServiceFileMetadata? {
         let attributes: [FileAttributeKey: Any]
         do { attributes = try fileManager.attributesOfItem(atPath: url.path) }
-        catch CocoaError.fileNoSuchFile { return nil }
+        catch let error as CocoaError where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile { return nil }
         let type = attributes[.type] as? FileAttributeType
         return .init(
             isRegularFile: type == .typeRegular,

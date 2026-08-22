@@ -242,7 +242,10 @@ final class LegacyAppRetirement {
         guard verify.status == 0 else { throw LegacyAppRetirementError.untrustedSignature(verify.error) }
         let display = run("/usr/bin/codesign", ["-d", "-r-", "--verbose=4", appURL.path])
         guard display.status == 0 else { throw LegacyAppRetirementError.untrustedSignature(display.error) }
-        let requirement = (display.output + "\n" + display.error).lowercased()
+        let combinedOutput = display.output + "\n" + display.error
+        guard let requirement = Self.designatedRequirement(in: combinedOutput) else {
+            throw LegacyAppRetirementError.untrustedSignature("designated requirement missing")
+        }
         let accepted = Self.acceptsDesignatedRequirement(requirement)
         guard accepted else { throw LegacyAppRetirementError.untrustedSignature("unmatched designated requirement") }
         return requirement
@@ -253,6 +256,13 @@ final class LegacyAppRetirement {
         return normalized.contains("anchor apple generic")
             && normalized.contains("certificate leaf[subject.ou] = \(developerTeamID.lowercased())")
             || normalized.contains("certificate leaf = h\"\(historicalLeaf)\"")
+    }
+
+    static func designatedRequirement(in output: String) -> String? {
+        output.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { $0.lowercased().hasPrefix("designated =>") }?
+            .lowercased()
     }
 
     private func isRegularDirectory(_ url: URL) throws -> Bool {

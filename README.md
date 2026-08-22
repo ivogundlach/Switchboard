@@ -7,7 +7,7 @@ Switchboard is a menu-bar control center for 17 small Mac utilities. It keeps mo
 - Target: macOS 26 on Apple silicon.
 - Runtime: one Switchboard background agent runs enabled scheduled jobs and workers.
 - Catalog: 17 ready Switchboard modules; no planned or pilot entries.
-- Verification: the current suite is **162 tests in 27 suites**.
+- Verification: the current suite is **166 tests in 27 suites**.
 - Distribution: the Developer ID Application certificate for Team `Q2X7X86GYR` is available. The implemented updater verifies a GitHub manifest, expected team, and SHA-256 before installation. A release is public only when its notarized DMG and manifest are visible together on GitHub Releases.
 
 ## Product boundaries

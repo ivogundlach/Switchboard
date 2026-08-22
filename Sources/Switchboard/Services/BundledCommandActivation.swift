@@ -1,15 +1,18 @@
+import Darwin
 import Foundation
 
 protocol BundledCommandActivationFileSystem {
     func metadata(at url: URL) throws -> BundledCommandFileMetadata?
     func readData(at url: URL) throws -> Data
     func readSymbolicLink(at url: URL) throws -> URL
+    func readSymbolicLinkDestination(at url: URL) throws -> String
     func createDirectory(at url: URL, permissions: UInt16) throws
     func writeData(_ data: Data, to url: URL, permissions: UInt16) throws
     func writeDataAtomically(_ data: Data, to url: URL, permissions: UInt16) throws
     func setMetadata(_ metadata: BundledCommandFileMetadata, at url: URL) throws
     func removeItem(at url: URL) throws
     func createSymbolicLink(at url: URL, pointingTo target: URL) throws
+    func createSymbolicLink(at url: URL, pointingToPath target: String) throws
     func atomicallyReplaceItem(at url: URL, withSymbolicLinkTo target: URL) throws
 }
 
@@ -41,6 +44,23 @@ private struct BundledCommandActivationRecord: Codable, Equatable {
     let destinationURL: URL
     let backupURL: URL?
     let legacyMetadata: BundledCommandFileMetadata?
+    let legacySymbolicLinkDestination: String?
+
+    init(
+        commandName: String,
+        targetURL: URL,
+        destinationURL: URL,
+        backupURL: URL?,
+        legacyMetadata: BundledCommandFileMetadata?,
+        legacySymbolicLinkDestination: String? = nil
+    ) {
+        self.commandName = commandName
+        self.targetURL = targetURL
+        self.destinationURL = destinationURL
+        self.backupURL = backupURL
+        self.legacyMetadata = legacyMetadata
+        self.legacySymbolicLinkDestination = legacySymbolicLinkDestination
+    }
 }
 
 private struct BundledCommandActivationState: Codable, Equatable {
@@ -133,10 +153,20 @@ struct BundledCommandActivation {
                 if let metadata {
                     if metadata.isSymbolicLink {
                         let existingTarget = try fileSystem.readSymbolicLink(at: destination)
-                        guard existingTarget.standardizedFileURL == target.standardizedFileURL else {
-                            throw BundledCommandActivationError.legacyItemIsSymbolicLink(destination)
+                        if existingTarget.standardizedFileURL == target.standardizedFileURL {
+                            records.append(.init(commandName: name, targetURL: target, destinationURL: destination, backupURL: nil, legacyMetadata: nil))
+                        } else {
+                            let rawTarget = try fileSystem.readSymbolicLinkDestination(at: destination)
+                            try validateLegacySymbolicLink(rawTarget, at: destination)
+                            records.append(.init(
+                                commandName: name,
+                                targetURL: target,
+                                destinationURL: destination,
+                                backupURL: nil,
+                                legacyMetadata: metadata,
+                                legacySymbolicLinkDestination: rawTarget
+                            ))
                         }
-                        records.append(.init(commandName: name, targetURL: target, destinationURL: destination, backupURL: nil, legacyMetadata: nil))
                     } else if !metadata.isRegularFile {
                         throw BundledCommandActivationError.legacyItemIsNotRegular(destination)
                     } else {
@@ -246,7 +276,7 @@ struct BundledCommandActivation {
             }
 
             guard let metadata = try fileSystem.metadata(at: destination) else {
-                if let record, record.backupURL != nil {
+                if let record, record.backupURL != nil || record.legacySymbolicLinkDestination != nil {
                     guard var pendingState = workingState else { continue }
                     try markPendingDisable(name, in: &pendingState)
                     try persist(pendingState, named: "intent.json", under: pendingState.transactionDirectory)
@@ -267,6 +297,16 @@ struct BundledCommandActivation {
                     workingState?.records.removeAll { $0.commandName == record.commandName }
                     remaining.removeAll { $0.commandName == name }
                 }
+                continue
+            }
+            if let record,
+               workingState?.pendingDisable.contains(name) == true,
+               metadata.isSymbolicLink,
+               let legacyTarget = record.legacySymbolicLinkDestination,
+               try fileSystem.readSymbolicLinkDestination(at: destination) == legacyTarget {
+                workingState?.pendingDisable.removeAll { $0 == name }
+                workingState?.records.removeAll { $0.commandName == name }
+                remaining.removeAll { $0.commandName == name }
                 continue
             }
             if let record,
@@ -296,7 +336,7 @@ struct BundledCommandActivation {
             try persist(pendingState, named: "state.json", under: moduleRecoveryURL)
             try fileSystem.removeItem(at: destination)
             if let record {
-                if record.backupURL != nil {
+                if record.backupURL != nil || record.legacySymbolicLinkDestination != nil {
                     // Keep the pending marker durable across the removal and before
                     // restoring the legacy item. A crash in either window resumes
                     // safely on the next disable.
@@ -388,6 +428,10 @@ struct BundledCommandActivation {
                     throw BundledCommandActivationError.stateCorrupt(moduleRecoveryURL.appendingPathComponent("state.json"))
                 }
             }
+            if let target = record.legacySymbolicLinkDestination,
+               target.isEmpty || target.contains("\0") {
+                throw BundledCommandActivationError.stateCorrupt(moduleRecoveryURL.appendingPathComponent("state.json"))
+            }
         }
     }
 
@@ -402,6 +446,11 @@ struct BundledCommandActivation {
 
     @discardableResult
     private func restore(_ record: BundledCommandActivationRecord) throws -> Bool {
+        if let legacyTarget = record.legacySymbolicLinkDestination {
+            guard try fileSystem.metadata(at: record.destinationURL) == nil else { return false }
+            try fileSystem.createSymbolicLink(at: record.destinationURL, pointingToPath: legacyTarget)
+            return true
+        }
         guard let backup = record.backupURL, let metadata = record.legacyMetadata else { return true }
         // Never overwrite a destination that appeared after the owned symlink was
         // removed. This preserves a foreign modification across crash recovery.
@@ -412,6 +461,26 @@ struct BundledCommandActivation {
         // process crashes here, the next disable can prove the destination is
         // our completed restore instead of mistaking it for a foreign file.
         return true
+    }
+
+    private func validateLegacySymbolicLink(_ rawTarget: String, at destination: URL) throws {
+        guard !rawTarget.isEmpty, !rawTarget.contains("\0") else {
+            throw BundledCommandActivationError.legacyItemIsSymbolicLink(destination)
+        }
+        let resolved: URL
+        if rawTarget.hasPrefix("/") {
+            resolved = URL(fileURLWithPath: rawTarget).standardizedFileURL
+        } else {
+            resolved = destination.deletingLastPathComponent().appendingPathComponent(rawTarget).standardizedFileURL
+        }
+        let home = localBinURL.deletingLastPathComponent().deletingLastPathComponent().standardizedFileURL
+        guard resolved.path.hasPrefix(home.path + "/"),
+              let metadata = try fileSystem.metadata(at: resolved),
+              metadata.isRegularFile,
+              !metadata.isSymbolicLink,
+              metadata.posixPermissions & 0o111 != 0 else {
+            throw BundledCommandActivationError.legacyItemIsSymbolicLink(destination)
+        }
     }
 
     private func rollback(_ records: [BundledCommandActivationRecord], state: BundledCommandActivationState) throws {
@@ -465,7 +534,13 @@ struct LocalBundledCommandActivationFileSystem: BundledCommandActivationFileSyst
     func readData(at url: URL) throws -> Data { try Data(contentsOf: url) }
 
     func readSymbolicLink(at url: URL) throws -> URL {
-        URL(fileURLWithPath: try fileManager.destinationOfSymbolicLink(atPath: url.path))
+        let target = try fileManager.destinationOfSymbolicLink(atPath: url.path)
+        if target.hasPrefix("/") { return URL(fileURLWithPath: target) }
+        return url.deletingLastPathComponent().appendingPathComponent(target).standardizedFileURL
+    }
+
+    func readSymbolicLinkDestination(at url: URL) throws -> String {
+        try fileManager.destinationOfSymbolicLink(atPath: url.path)
     }
 
     func createDirectory(at url: URL, permissions: UInt16) throws {
@@ -480,12 +555,9 @@ struct LocalBundledCommandActivationFileSystem: BundledCommandActivationFileSyst
 
     func writeDataAtomically(_ data: Data, to url: URL, permissions: UInt16) throws {
         let temporary = url.deletingLastPathComponent().appendingPathComponent(".\(url.lastPathComponent).tmp-\(UUID().uuidString)")
+        defer { try? removeItem(at: temporary) }
         try writeData(data, to: temporary, permissions: permissions)
-        if try metadata(at: url) != nil {
-            _ = try fileManager.replaceItemAt(url, withItemAt: temporary, backupItemName: nil, options: [])
-        } else {
-            try fileManager.moveItem(at: temporary, to: url)
-        }
+        try atomicRename(temporary, to: url)
     }
 
     func setMetadata(_ metadata: BundledCommandFileMetadata, at url: URL) throws {
@@ -503,14 +575,25 @@ struct LocalBundledCommandActivationFileSystem: BundledCommandActivationFileSyst
         try fileManager.createSymbolicLink(at: url, withDestinationURL: target)
     }
 
+    func createSymbolicLink(at url: URL, pointingToPath target: String) throws {
+        try fileManager.createSymbolicLink(atPath: url.path, withDestinationPath: target)
+    }
+
     func atomicallyReplaceItem(at url: URL, withSymbolicLinkTo target: URL) throws {
         let temporary = url.deletingLastPathComponent().appendingPathComponent(".switchboard-\(UUID().uuidString)")
         defer { try? removeItem(at: temporary) }
         try createSymbolicLink(at: temporary, pointingTo: target)
-        if try metadata(at: url) != nil {
-            _ = try fileManager.replaceItemAt(url, withItemAt: temporary, backupItemName: nil, options: [])
-        } else {
-            try fileManager.moveItem(at: temporary, to: url)
+        try atomicRename(temporary, to: url)
+    }
+
+    private func atomicRename(_ source: URL, to destination: URL) throws {
+        let result = source.path.withCString { sourcePath in
+            destination.path.withCString { destinationPath in
+                Darwin.rename(sourcePath, destinationPath)
+            }
+        }
+        guard result == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         }
     }
 }

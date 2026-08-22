@@ -15,4 +15,17 @@ struct LegacyAppRetirementTests {
         #expect(LegacyAppRetirement.acceptsDesignatedRequirement(developerID))
         #expect(!LegacyAppRetirement.acceptsDesignatedRequirement(foreign))
     }
+
+    @Test
+    func extractsOnlyTheStableDesignatedRequirementFromVerboseCodesignOutput() {
+        let installed = """
+        Executable=/Applications/CopyPath.app/Contents/MacOS/CopyPath
+        designated => identifier "com.ivo.CopyPath" and certificate leaf = H"12f05e96dc78def756913a2d574ff98f6c5bd485"
+        """
+        let archived = """
+        Executable=/Users/test/Library/Application Support/Switchboard/Recovery/LegacyApps/CopyPath.app/Contents/MacOS/CopyPath
+        designated => identifier "com.ivo.CopyPath" and certificate leaf = H"12f05e96dc78def756913a2d574ff98f6c5bd485"
+        """
+        #expect(LegacyAppRetirement.designatedRequirement(in: installed) == LegacyAppRetirement.designatedRequirement(in: archived))
+    }
 }

@@ -16,6 +16,65 @@ struct BundledCommandActivationTests {
     }
 
     @Test
+    func localFilesystemAtomicallyReplacesExistingFilesAndState() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("switchboard-real-command-fs-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let fileSystem = LocalBundledCommandActivationFileSystem()
+        let destination = root.appendingPathComponent("command")
+        let target = root.appendingPathComponent("bundled-command")
+        try Data("legacy".utf8).write(to: destination)
+        try Data("bundled".utf8).write(to: target)
+        try fileSystem.atomicallyReplaceItem(at: destination, withSymbolicLinkTo: target)
+        #expect(try fileSystem.metadata(at: destination)?.isSymbolicLink == true)
+        #expect(try fileSystem.readSymbolicLink(at: destination) == target)
+
+        let state = root.appendingPathComponent("state.json")
+        try Data("old".utf8).write(to: state)
+        try fileSystem.writeDataAtomically(Data("new".utf8), to: state, permissions: 0o600)
+        #expect(try Data(contentsOf: state) == Data("new".utf8))
+    }
+
+    @Test
+    func ownedLegacySymlinkWithinHomeIsRestoredAfterDisable() throws {
+        let fileSystem = MemoryBundledCommandFileSystem()
+        let service = makeService(fileSystem)
+        addExecutable(fileSystem, name: "memory-search")
+        let destination = localBin.appendingPathComponent("memory-search")
+        let legacyTarget = URL(fileURLWithPath: "/fixture/home/.memory/tools/memory-search")
+        fileSystem.addFile(
+            at: legacyTarget,
+            data: Data("#!/bin/sh\n".utf8),
+            metadata: .init(isRegularFile: true, isDirectory: false, isSymbolicLink: false, posixPermissions: 0o755, modificationDate: nil)
+        )
+        fileSystem.addSymbolicLink(at: destination, pointingTo: legacyTarget)
+
+        try service.enable(bundleURL: canonical, moduleID: moduleID, commandNames: ["memory-search"])
+        #expect(fileSystem.symbolicLinkTarget(at: destination) == sourceURL("memory-search"))
+        try service.disable(bundleURL: canonical, moduleID: moduleID, commandNames: ["memory-search"])
+        #expect(fileSystem.symbolicLinkTarget(at: destination) == legacyTarget)
+    }
+
+    @Test
+    func legacySymlinkOutsideHomeIsRejected() throws {
+        let fileSystem = MemoryBundledCommandFileSystem()
+        let service = makeService(fileSystem)
+        addExecutable(fileSystem, name: "foreign")
+        let destination = localBin.appendingPathComponent("foreign")
+        let foreignTarget = URL(fileURLWithPath: "/opt/homebrew/bin/foreign")
+        fileSystem.addFile(
+            at: foreignTarget,
+            data: Data("binary".utf8),
+            metadata: .init(isRegularFile: true, isDirectory: false, isSymbolicLink: false, posixPermissions: 0o755, modificationDate: nil)
+        )
+        fileSystem.addSymbolicLink(at: destination, pointingTo: foreignTarget)
+        #expect(throws: BundledCommandActivationError.self) {
+            try service.enable(bundleURL: canonical, moduleID: moduleID, commandNames: ["foreign"])
+        }
+    }
+
+    @Test
     func traversalAndSourceSymlinkAreRejected() throws {
         let fileSystem = MemoryBundledCommandFileSystem()
         let service = makeService(fileSystem)
@@ -236,6 +295,10 @@ private final class MemoryBundledCommandFileSystem: BundledCommandActivationFile
         return target
     }
 
+    func readSymbolicLinkDestination(at url: URL) throws -> String {
+        try readSymbolicLink(at: url).path
+    }
+
     func createDirectory(at url: URL, permissions: UInt16) throws {
         nodes[key(url)] = .directory(.init(isRegularFile: false, isDirectory: true, isSymbolicLink: false, posixPermissions: permissions, modificationDate: nil))
     }
@@ -271,6 +334,10 @@ private final class MemoryBundledCommandFileSystem: BundledCommandActivationFile
 
     func createSymbolicLink(at url: URL, pointingTo target: URL) throws {
         addSymbolicLink(at: url, pointingTo: target)
+    }
+
+    func createSymbolicLink(at url: URL, pointingToPath target: String) throws {
+        addSymbolicLink(at: url, pointingTo: URL(fileURLWithPath: target))
     }
 
     func atomicallyReplaceItem(at url: URL, withSymbolicLinkTo target: URL) throws {

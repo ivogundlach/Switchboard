@@ -1017,6 +1017,16 @@ final class ModuleStore {
                 while !app.isTerminated, Date() < deadline {
                     try await Task.sleep(for: .milliseconds(100))
                 }
+                if !app.isTerminated {
+                    guard processExecutablePath(pid) == appURL.appending(path: "Contents/MacOS/\(executable)").path,
+                          app.forceTerminate() else {
+                        throw UpgradeExecutionError.quiescenceFailed("\(item.component.displayName) could not be stopped after its graceful timeout")
+                    }
+                    let forceDeadline = Date().addingTimeInterval(4)
+                    while !app.isTerminated, Date() < forceDeadline {
+                        try await Task.sleep(for: .milliseconds(100))
+                    }
+                }
                 guard app.isTerminated else {
                     throw UpgradeExecutionError.quiescenceFailed("\(item.component.displayName) did not stop")
                 }
